@@ -10,7 +10,7 @@ Scroll benchmark for baked SVG shadows. It compares three versions of the same 4
 
 ```bash
 flutter pub get
-flutter drive --profile --driver=test_driver/perf_driver.dart --target=integration_test/scroll_test.dart -d <device-id>
+flutter drive --profile --no-dds --driver=test_driver/perf_driver.dart --target=integration_test/scroll_test.dart -d <device-id>
 ```
 
 Results land in `build/<set>_round<n>.json` (average, 90th and 99th percentile build and raster times, and missed frames).
