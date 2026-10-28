@@ -385,6 +385,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js"></script>
 <script type="module">
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XLINK_NS = 'http://www.w3.org/1999/xlink';
@@ -666,8 +667,186 @@ function paintSilhouette(original, clone, color, extraWidth, warnings) {
   originalChildren.forEach((child, index) => paintSilhouette(child, cloneChildren[index], color, extraWidth, warnings));
 }
 
-function bakeDropShadow(doc, element, effect, tuning, warnings) {
+// ---- Shadow outlines ----
+// Flutter draws a group with opacity through an offscreen layer (saveLayer), and applies a shape's own opacity to its
+// fill and stroke separately, which darkens wherever they overlap. So where it can, each drop shadow layer is baked as
+// one filled path: the artwork's outline, merged and widened with Clipper. That draws in Flutter without either problem.
+const CLIPPER_SCALE = 1000;
+const NUMBER = /[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g;
+
+// Splits path data into subpaths that each start with an absolute moveto, so each can be measured on its own.
+function subpathsOf(d, probe) {
+  const chunks = d.trim().split(/(?=[Mm])/).filter((chunk) => chunk.trim());
+  const subpaths = [];
+  let x = 0, y = 0;
+  for (const chunk of chunks) {
+    const numbers = chunk.slice(1).match(NUMBER) ?? [];
+    if (numbers.length < 2) continue;
+    let startX = Number(numbers[0]), startY = Number(numbers[1]);
+    if (chunk[0] === 'm') { startX += x; startY += y; }
+    // Coordinates after the first pair of a moveto are linetos, relative or absolute like the moveto itself.
+    const rest = chunk.slice(1).replace(/^[\s,]*[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?[\s,]*[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/, '');
+    const text = `M${startX} ${startY}${rest.trim() ? (chunk[0] === 'm' ? 'l' : 'L') + rest : ''}`.replace(/([lL])\s*([a-zA-Z])/, '$2');
+    const closed = /z\s*$/i.test(chunk);
+    probe.setAttribute('d', text);
+    const length = probe.getTotalLength();
+    if (closed) { x = startX; y = startY; } else ({ x, y } = probe.getPointAtLength(length));
+    subpaths.push({ text, closed, length });
+  }
+  return subpaths;
+}
+
+function samplePolygon(probe, subpath, matrix, step) {
+  probe.setAttribute('d', subpath.text);
+  const count = Math.max(8, Math.ceil(subpath.length / step));
+  const points = [];
+  for (let i = 0; i <= count; i++) {
+    const point = matrix.transformPoint(probe.getPointAtLength(subpath.length * i / count));
+    points.push({ X: Math.round(point.x * CLIPPER_SCALE), Y: Math.round(point.y * CLIPPER_SCALE) });
+  }
+  return points;
+}
+
+function clipperUnion(paths, fillType) {
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(paths, ClipperLib.PolyType.ptSubject, true);
+  const result = new ClipperLib.Paths();
+  clipper.Execute(ClipperLib.ClipType.ctUnion, result, fillType, fillType);
+  return result;
+}
+
+function clipperOffset(paths, delta, joinType, endType, step) {
+  const offset = new ClipperLib.ClipperOffset(2, step * CLIPPER_SCALE / 4);
+  offset.AddPaths(paths, joinType, endType);
+  const result = new ClipperLib.Paths();
+  offset.Execute(result, delta * CLIPPER_SCALE);
+  return result;
+}
+
+const JOINS = { round: 'jtRound', bevel: 'jtSquare', miter: 'jtMiter', 'miter-clip': 'jtMiter', arcs: 'jtRound' };
+const CAPS = { round: 'etOpenRound', square: 'etOpenSquare', butt: 'etOpenButt' };
+
+// The area the artwork paints, in the coordinates of `space`, or null when only the old layered method can draw it.
+function artworkRegion(nodes, space, step, warnings) {
+  if (typeof ClipperLib === 'undefined') return null;
+  const shapes = [];
+  for (const node of nodes) {
+    if (node.closest?.('text') || node.querySelector?.('text, tspan')) return null;
+    if (node.localName === 'text') return null;
+    for (const element of [node, ...node.querySelectorAll('*')]) {
+      if (isInsideNonRendered(element, space) || NON_RENDERED.has(element.localName)) continue;
+      if (element.hasAttribute('clip-path') || element.hasAttribute('mask') || styleProperty(element, 'clip-path') || styleProperty(element, 'mask')) return null;
+      if (paintOf(element, 'display', 'inline') === 'none') return null;
+      if (element.localName === 'image' || element.localName === 'use' || element.localName === 'foreignObject') {
+        warnings.add(`<${element.localName}> elements are left out of baked shadows`);
+        continue;
+      }
+      if (FILLABLE.has(element.localName) || element.localName === 'line') shapes.push(element);
+    }
+  }
+  if (!shapes.length) return null;
+
+  const probe = document.createElementNS(SVG_NS, 'path');
+  scratch.appendChild(probe);
+  try {
+    const regions = [];
+    for (const shape of shapes) {
+      const d = shape.localName === 'line'
+        ? `M${num(shape.getAttribute('x1'))} ${num(shape.getAttribute('y1'))}L${num(shape.getAttribute('x2'))} ${num(shape.getAttribute('y2'))}`
+        : shapeToPathData(shape);
+      if (!d) continue;
+      let matrix = new DOMMatrix();
+      const chain = [];
+      for (let node = shape; node && node !== space; node = node.parentNode) chain.unshift(node.getAttribute('transform'));
+      for (const transform of chain) matrix = matrix.multiply(matrixOf(transform));
+      const scale = Math.sqrt(Math.abs(matrix.a * matrix.d - matrix.b * matrix.c)) || 1;
+      const localStep = step / scale;
+      const subpaths = subpathsOf(d, probe).filter((subpath) => subpath.length > 0);
+      const local = new DOMMatrix();
+      if (shape.localName !== 'line' && paintOf(shape, 'fill', 'black') !== 'none') {
+        const fillType = paintOf(shape, 'fill-rule', 'nonzero') === 'evenodd' ? ClipperLib.PolyFillType.pftEvenOdd : ClipperLib.PolyFillType.pftNonZero;
+        regions.push(transformPaths(clipperUnion(subpaths.map((subpath) => samplePolygon(probe, subpath, local, localStep)), fillType), matrix));
+      }
+      if (paintOf(shape, 'stroke', 'none') !== 'none') {
+        const width = num(paintOf(shape, 'stroke-width', '1'), 1);
+        const join = ClipperLib.JoinType[JOINS[paintOf(shape, 'stroke-linejoin', 'miter')] ?? 'jtMiter'];
+        const cap = CAPS[paintOf(shape, 'stroke-linecap', 'butt')] ?? 'etOpenButt';
+        for (const subpath of subpaths) {
+          const polygon = samplePolygon(probe, subpath, local, localStep);
+          const ends = subpath.closed ? ClipperLib.EndType.etClosedLine : ClipperLib.EndType[cap];
+          regions.push(transformPaths(clipperOffset([polygon], width / 2, join, ends, localStep), matrix));
+        }
+      }
+    }
+    const region = clipperUnion(regions.flat(), ClipperLib.PolyFillType.pftNonZero);
+    return region.length ? region : null;
+  } finally {
+    probe.remove();
+  }
+}
+
+function transformPaths(paths, matrix) {
+  return paths.map((path) => path.map(({ X, Y }) => {
+    const point = matrix.transformPoint({ x: X / CLIPPER_SCALE, y: Y / CLIPPER_SCALE });
+    return { X: Math.round(point.x * CLIPPER_SCALE), Y: Math.round(point.y * CLIPPER_SCALE) };
+  }));
+}
+
+// Ramer-Douglas-Peucker: drops points that stay within `tolerance` of the simplified outline. Clipper's own
+// CleanPolygons checks each point only against its neighbours, so on a finely traced curve the removals add up.
+function simplify(polygon, tolerance) {
+  if (polygon.length < 4) return polygon;
+  let far = 0, farDistance = -1;
+  for (let i = 1; i < polygon.length; i++) {
+    const distance = Math.hypot(polygon[i].X - polygon[0].X, polygon[i].Y - polygon[0].Y);
+    if (distance > farDistance) { far = i; farDistance = distance; }
+  }
+  const keep = new Uint8Array(polygon.length);
+  keep[0] = keep[far] = 1;
+  const stack = [[0, far], [far, polygon.length]];
+  while (stack.length) {
+    const [from, to] = stack.pop();
+    const a = polygon[from], b = polygon[to % polygon.length];
+    const length = Math.hypot(b.X - a.X, b.Y - a.Y) || 1;
+    let worst = -1, worstDistance = tolerance;
+    for (let i = from + 1; i < to; i++) {
+      const distance = Math.abs((b.X - a.X) * (a.Y - polygon[i].Y) - (a.X - polygon[i].X) * (b.Y - a.Y)) / length;
+      if (distance > worstDistance) { worst = i; worstDistance = distance; }
+    }
+    if (worst >= 0) {
+      keep[worst] = 1;
+      stack.push([from, worst], [worst, to]);
+    }
+  }
+  return polygon.filter((_, i) => keep[i]);
+}
+
+function outlinePath(doc, region, layer, color, step) {
+  let paths = layer.width > 0
+    ? clipperOffset(region, layer.width / 2, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon, step)
+    : region;
+  const d = paths.map((path) => simplify(path, step * CLIPPER_SCALE)).filter((path) => path.length > 2)
+    .map((path) => `M${path.map(({ X, Y }) => `${fmt(X / CLIPPER_SCALE)} ${fmt(Y / CLIPPER_SCALE)}`).join('L')}Z`).join('');
+  const shadow = doc.createElementNS(SVG_NS, 'path');
+  shadow.setAttribute('d', d);
+  shadow.setAttribute('fill', color);
+  shadow.setAttribute('stroke', 'none');
+  shadow.setAttribute('opacity', fmt(layer.alpha));
+  return shadow;
+}
+
+function bakeDropShadow(doc, element, effect, tuning, warnings, step) {
   const wrapper = doc.createElementNS(SVG_NS, 'g');
+  const region = artworkRegion([element], element, step, warnings);
+  if (region) {
+    for (const layer of layerPlan(effect, tuning)) {
+      const shadow = outlinePath(doc, region, layer, effect.color, step);
+      shadow.setAttribute('transform', `${element.getAttribute('transform') || ''} translate(${fmt(layer.dx)} ${fmt(layer.dy)})`.trim());
+      wrapper.appendChild(shadow);
+    }
+    element.parentNode.insertBefore(wrapper, element);
+    return;
+  }
   for (const layer of layerPlan(effect, tuning)) {
     const shadow = silhouette(element, effect.color, layer.width, warnings);
     const offset = `translate(${fmt(layer.dx)} ${fmt(layer.dy)})`;
@@ -678,10 +857,20 @@ function bakeDropShadow(doc, element, effect, tuning, warnings) {
   element.parentNode.insertBefore(wrapper, element);
 }
 
-function bakeRootShadow(doc, root, effect, tuning, warnings) {
+function bakeRootShadow(doc, root, effect, tuning, warnings, step) {
   const artwork = [...root.children].filter((node) => !NON_RENDERED.has(node.localName));
   if (!artwork.length) return false;
   const wrapper = doc.createElementNS(SVG_NS, 'g');
+  const region = artworkRegion(artwork, root, step, warnings);
+  if (region) {
+    for (const layer of layerPlan(effect, tuning)) {
+      const shadow = outlinePath(doc, region, layer, effect.color, step);
+      shadow.setAttribute('transform', `translate(${fmt(layer.dx)} ${fmt(layer.dy)})`);
+      wrapper.appendChild(shadow);
+    }
+    root.insertBefore(wrapper, artwork[0]);
+    return true;
+  }
   for (const layer of layerPlan(effect, tuning)) {
     const group = doc.createElementNS(SVG_NS, 'g');
     group.setAttribute('opacity', fmt(layer.alpha));
@@ -826,6 +1015,10 @@ function convert(source, settings) {
   };
 
   const tuning = { strength: settings.strength, softness: settings.softness, lift: settings.lift };
+  // Outlines are traced at about 1/1000 of the drawing's size, finer than any screen it will be shown on.
+  const box = root.viewBox?.baseVal;
+  const extent = box && box.width ? Math.hypot(box.width, box.height) : Math.hypot(num(root.getAttribute('width'), 100), num(root.getAttribute('height'), 100));
+  const step = extent / 1000;
   let drops = 0, inners = 0;
   const filtered = [...root.querySelectorAll('[filter],[style*="filter"]')];
   for (const element of filtered) {
@@ -839,8 +1032,8 @@ function convert(source, settings) {
     const isRoot = element === root;
     const innerShapes = fillableShapes(element);
     for (const effect of effects.filter((e) => e.type === 'drop')) {
-      if (isRoot) bakeRootShadow(doc, root, effect, tuning, warnings);
-      else bakeDropShadow(doc, element, effect, tuning, warnings);
+      if (isRoot) bakeRootShadow(doc, root, effect, tuning, warnings, step);
+      else bakeDropShadow(doc, element, effect, tuning, warnings, step);
       drops++;
     }
     for (const effect of effects.filter((e) => e.type === 'inner')) {
@@ -856,7 +1049,7 @@ function convert(source, settings) {
   if (settings.add.enabled && !filterCount && !filtered.length) {
     added = bakeRootShadow(doc, root, {
       dx: 0, dy: 0, sigma: settings.add.blur, spread: 0, color: settings.add.color, alpha: settings.add.opacity,
-    }, { strength: 1, softness: 1, lift: settings.add.lift }, warnings);
+    }, { strength: 1, softness: 1, lift: settings.add.lift }, warnings, step);
     if (added) notes.push('Added a soft shadow to the artwork');
   }
 

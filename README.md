@@ -30,7 +30,7 @@ Your files and settings are kept in the browser (IndexedDB), so they are still t
 
 | In the SVG | What happens |
 | --- | --- |
-| Drop shadow filter | Rebuilt as stacked, offset copies of the artwork |
+| Drop shadow filter | Rebuilt as stacked, offset outlines of the artwork |
 | Inner shadow filter | Rebuilt as a clipped, offset cut-out of each shape |
 | Layer or background blur | Removed, with a warning |
 | `<style>` rules | Inlined onto the elements they style |
@@ -40,7 +40,9 @@ Then [SVGO](https://github.com/svg/svgo) minifies the result with its default pr
 
 ### How a blur becomes shapes
 
-A Gaussian blur fades out gradually from an edge. The tool approximates that with eight copies of the artwork drawn behind it in the shadow colour, each with a stroke that reaches a little further out, in even steps up to three blur radii. Where they overlap, the darkness adds up. Each copy's opacity is solved so the band it adds is exactly as dark as a real Gaussian blur at that distance: half the shadow's opacity at the edge, fading smoothly to nothing.
+A Gaussian blur fades out gradually from an edge. The tool approximates that with eight outlines of the artwork drawn behind it in the shadow colour, each reaching a little further out, in even steps up to three blur radii. Where they overlap, the darkness adds up. Each outline's opacity is solved so the band it adds is exactly as dark as a real Gaussian blur at that distance: half the shadow's opacity at the edge, fading smoothly to nothing.
+
+Each outline is a single filled path: the artwork's shapes and strokes are traced, merged and widened with [Clipper](https://www.npmjs.com/package/clipper-lib). That matters for speed in Flutter. A group with `opacity` makes Flutter draw it into an offscreen layer first, and a shape's own `opacity` is applied to its fill and its stroke separately, which darkens wherever they overlap. One filled path per outline avoids both, so a shadow costs no offscreen layers. `bench/shadow_bench` measures the difference on a device. Artwork with text, clip paths or masks falls back to grouped copies of the artwork.
 
 Inner shadows use the same layers, drawn as a large rectangle with the shape cut out of it, offset, and clipped to the shape. `flutter_svg` only accepts plain shapes inside a `<clipPath>`, so each shape gets its own clip.
 
@@ -72,7 +74,8 @@ It edits the files in place and skips files it has already shadowed. Run it befo
 - `<image>` and `<use>` elements are left out of baked shadows, because their colours can't be changed.
 - Inner shadows are applied per shape, so overlapping shapes inside one filtered group each get their own inner edge.
 - A filter shadow is cut out under its shape; a baked one sits behind it. Semi-transparent shapes therefore show their baked drop shadow through them. Use solid colours for shapes that cast a shadow.
-- Baked shadows add path data, so files usually grow even after minifying.
+- Baked shadows add path data, so files usually grow even after minifying. Traced outlines are polygons, a few kilobytes per shadow for typical icons.
+- `cli/bake_svg_shadow.dart` still bakes stacked stroke copies, which Flutter draws with offscreen layers when the artwork has several shapes.
 
 ## License
 

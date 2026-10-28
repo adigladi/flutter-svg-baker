@@ -3,7 +3,7 @@
 Scroll benchmark for baked SVG shadows. It compares three versions of the same 4 icons, 6 per row in a 1000-row list:
 
 - `before`: baked by the page as it is today. Each shadow layer is a group with `opacity`, which Flutter draws with a saveLayer.
-- `after`: the same shadows with the opacity moved onto each shape, so no saveLayer.
+- `after`: the same shadows baked as one filled outline per layer (merged and widened with Clipper), so no saveLayer.
 - `plain`: the source files, with no baked shadow, as a baseline.
 
 ## Run on a device

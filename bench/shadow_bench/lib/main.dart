@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 /// before: shadows as baked today (each layer is a group with opacity, so Flutter uses a saveLayer per layer).
-/// after: the same shadows with the opacity on each shape (no saveLayer).
+/// after: the same shadows as one filled outline per layer (no saveLayer).
 /// plain: the source files with no shadow, as a baseline.
 const sets = ['before', 'after', 'plain'];
 const icons = ['figma_group', 'figma_single', 'icon_multi', 'logo'];
