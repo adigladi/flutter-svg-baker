@@ -99,6 +99,14 @@
   .color-row input[type="text"] { width: 96px; font: 13px var(--font-mono); padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--sunken); color: var(--ink); }
   .sub { display: grid; gap: 12px; padding-left: 12px; border-left: 2px solid var(--line); }
   .sub[hidden] { display: none; }
+  .note { margin: 0; font-size: 12px; color: var(--muted); }
+  .svgo-options > summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 2px 0; }
+  .svgo-options[open] > summary { margin-bottom: 10px; }
+  .plugins summary { cursor: pointer; font-size: 13px; font-weight: 500; }
+  .plugin-grid { display: grid; gap: 4px; margin-top: 8px; max-height: 260px; overflow-y: auto; padding-right: 4px; }
+  .plugin-grid label { display: flex; gap: 8px; align-items: center; font: 12px var(--font-mono); overflow-wrap: anywhere; }
+  .plugin-grid input { accent-color: var(--accent); flex: none; }
+  button.confirming { border-color: var(--bad); color: var(--bad); }
 
   .support { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
   .support li { display: grid; grid-template-columns: 112px 1fr; gap: 8px; }
@@ -274,7 +282,26 @@
 
       <section class="panel" aria-labelledby="h-out">
         <h2 class="display" id="h-out">Output</h2>
-        <label class="check"><input type="checkbox" id="minify" checked><span>Minify with SVGO<small>SVGO's default preset, keeping <code>viewBox</code> and removing embedded raster images.</small></span></label>
+        <label class="check"><input type="checkbox" id="minify" checked aria-controls="svgoFields" aria-expanded="true"><span>Minify with SVGO<small>SVGO's default preset, keeping <code>viewBox</code> and removing embedded raster images.</small></span></label>
+        <details class="svgo-options" id="svgoFields">
+          <summary>SVGO options</summary>
+          <div class="sub">
+            <p class="note">These apply to every file.</p>
+            <label class="check"><input type="checkbox" id="svgoMultipass"><span>Multipass<small>Repeat until the file stops shrinking.</small></span></label>
+            <label class="check"><input type="checkbox" id="svgoStyleAttrs"><span>Convert styles to attributes<small>Turns <code>style=""</code> into plain attributes.</small></span></label>
+            <label class="check"><input type="checkbox" id="svgoRaster"><span>Remove raster images<small>PNG, JPEG and GIF, linked or embedded.</small></span></label>
+            <label class="check"><input type="checkbox" id="svgoPretty"><span>Pretty-print<small>Indented output, easier to diff.</small></span></label>
+            <div class="field">
+              <div class="field-row"><label for="svgoPrecision">Decimal places</label><output for="svgoPrecision" id="svgoPrecisionOut"></output></div>
+              <input type="range" id="svgoPrecision" min="0" max="6" step="1">
+            </div>
+            <details class="plugins">
+              <summary id="svgoPluginSummary">Preset plugins</summary>
+              <div class="plugin-grid" id="svgoPlugins"></div>
+            </details>
+            <button type="button" id="svgoReset">Reset SVGO options</button>
+            </div>
+        </details>
       </section>
 
       <section class="panel" aria-labelledby="h-support">
@@ -313,7 +340,8 @@
             <label><input type="radio" name="bg" value="dark">Dark</label>
           </div>
           <button type="button" class="primary" id="saveAll">Save all (.zip)</button>
-          <button type="button" id="clearAll">Clear</button>
+          <button type="button" id="clearAll">Clear files</button>
+          <button type="button" id="resetAll">Reset all</button>
         </div>
       </div>
       <div class="selectbar" aria-label="Select files">
@@ -321,6 +349,7 @@
         <button type="button" id="selectNone">Select none</button>
         <input type="text" id="matchText" placeholder="negative_*  or  icons/" spellcheck="false" aria-label="Select files whose path matches">
         <button type="button" id="selectMatches">Select matches</button>
+        <button type="button" id="removeSelected">Remove selected</button>
         <span class="count" id="selectCount"></span>
       </div>
       <div class="status" id="status" role="status" aria-live="polite"></div>
@@ -360,6 +389,21 @@ const downloadsReady = window.claude?.use ? window.claude.use('downloads').catch
 
 // A blur is approximated by evenly spaced bands out to SHADOW_REACH blur radii; past 3 radii a Gaussian has under 0.2% left.
 const SHADOW_LAYERS = 8;
+const PRESET_PLUGINS = [
+  'removeDoctype', 'removeXMLProcInst', 'removeComments', 'removeMetadata', 'removeEditorsNSData', 'cleanupAttrs',
+  'mergeStyles', 'inlineStyles', 'minifyStyles', 'cleanupIds', 'removeUselessDefs', 'cleanupNumericValues',
+  'convertColors', 'removeUnknownsAndDefaults', 'removeNonInheritableGroupAttrs', 'removeUselessStrokeAndFill',
+  'removeViewBox', 'cleanupEnableBackground', 'removeHiddenElems', 'removeEmptyText', 'convertShapeToPath',
+  'convertEllipseToCircle', 'moveElemsAttrsToGroup', 'moveGroupAttrsToElems', 'collapseGroups', 'convertPathData',
+  'convertTransform', 'removeEmptyAttrs', 'removeEmptyContainers', 'mergePaths', 'removeUnusedNS', 'sortAttrs',
+  'sortDefsChildren', 'removeTitle', 'removeDesc',
+];
+// removeViewBox stays off: without a viewBox, Flutter can't scale the picture to its widget.
+const SVGO_DEFAULTS = {
+  multipass: true, styleToAttrs: true, removeRaster: true, pretty: false, precision: 3,
+  plugins: Object.fromEntries(PRESET_PLUGINS.map((name) => [name, name !== 'removeViewBox'])),
+};
+const copySvgo = (svgo) => ({ ...svgo, plugins: { ...svgo.plugins } });
 const SHADOW_REACH = 3;
 const PAINTED = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'line', 'text', 'tspan']);
 const FILLABLE = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline']);
@@ -805,7 +849,8 @@ function convert(source, settings) {
   removeUnsupported(root, warnings);
   if (!defs.children.length) defs.remove();
 
-  if (settings.minify && optimize) {
+  const svgo = state.svgo;
+  if (settings.minify && optimize && svgo.removeRaster) {
     // SVGO's removeRasterImages only checks xlink:href, which misses SVG 2 exports that use plain href.
     const rasterImages = [...root.querySelectorAll('image')].filter((image) =>
       /(\.|image\/)(jpe?g|png|gif)/.test(image.getAttribute('href') ?? image.getAttributeNS(XLINK_NS, 'href') ?? ''));
@@ -817,9 +862,12 @@ function convert(source, settings) {
 
   let output = new XMLSerializer().serializeToString(doc);
   if (settings.minify && optimize) {
+    const overrides = Object.fromEntries(PRESET_PLUGINS.filter((name) => !svgo.plugins[name]).map((name) => [name, false]));
     output = optimize(output, {
-      multipass: true,
-      plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }, 'convertStyleToAttrs'],
+      multipass: svgo.multipass,
+      floatPrecision: svgo.precision,
+      js2svg: { pretty: svgo.pretty, indent: 2 },
+      plugins: [{ name: 'preset-default', params: { overrides } }, ...(svgo.styleToAttrs ? ['convertStyleToAttrs'] : [])],
     }).data;
     notes.push('Minified with SVGO');
   }
@@ -842,7 +890,7 @@ const FIELDS = [
   { key: 'minify', id: 'minify', kind: 'check' },
 ];
 
-const state = { files: [], isExample: true, bg: 'check', defaults: null };
+const state = { files: [], isExample: true, bg: 'check', defaults: null, svgo: copySvgo(SVGO_DEFAULTS) };
 const urls = new Set();
 
 function readControl(field) {
@@ -894,6 +942,9 @@ function syncControls() {
   const isAddOpen = $('addEnabled').checked || $('addEnabled').indeterminate;
   $('addFields').hidden = !isAddOpen;
   $('addEnabled').setAttribute('aria-expanded', String(isAddOpen));
+  const isMinifyOpen = $('minify').checked || $('minify').indeterminate;
+  $('svgoFields').hidden = !isMinifyOpen;
+  $('minify').setAttribute('aria-expanded', String(isMinifyOpen));
   renderScope();
 }
 
@@ -1062,6 +1113,7 @@ function render() {
       item.classList.toggle('selected', box.checked);
       syncControls();
       renderSelectCount();
+      scheduleSave();
     });
     const path = document.createElement('span');
     path.className = 'file-name';
@@ -1130,7 +1182,11 @@ function render() {
     copy.type = 'button';
     copy.textContent = 'Copy SVG';
     copy.addEventListener('click', () => copyText(file.output, file.name));
-    actions.append(save, copy);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => removeFiles([file]));
+    actions.append(save, copy, remove);
     item.appendChild(actions);
 
     list.appendChild(item);
@@ -1145,6 +1201,7 @@ function render() {
   $('saveAll').disabled = !state.files.some((file) => file.output);
   $('clearAll').disabled = !total;
   renderSelectCount();
+  scheduleSave();
 }
 
 function renderSelectCount() {
@@ -1152,6 +1209,7 @@ function renderSelectCount() {
   $('selectCount').textContent = count ? `${count} of ${state.files.length} selected` : 'None selected';
   $('selectNone').disabled = !count;
   $('selectAll').disabled = !state.files.length || count === state.files.length;
+  $('removeSelected').disabled = !count;
 }
 
 function setSelection(isSelected) {
@@ -1238,12 +1296,52 @@ $('saveAll').addEventListener('click', async () => {
   await saveFile('flutter-svgs.zip', blob);
 });
 
-$('clearAll').addEventListener('click', () => {
-  state.files = [];
-  state.isExample = false;
-  setStatus('');
+function removeFiles(files) {
+  const removing = new Set(files);
+  state.files = state.files.filter((file) => !removing.has(file));
+  if (!state.files.length) state.isExample = false;
+  setStatus(files.length === 1 ? `Removed ${files[0].path}.` : `Removed ${files.length} files.`);
   syncControls();
   render();
+}
+
+// Artifacts can't show confirm(), so destructive buttons ask for a second click instead.
+function confirmingButton(button, prompt, action) {
+  const label = button.textContent;
+  let timer = 0;
+  const disarm = () => {
+    clearTimeout(timer);
+    timer = 0;
+    button.textContent = label;
+    button.classList.remove('confirming');
+  };
+  button.addEventListener('click', () => {
+    if (timer) { disarm(); action(); return; }
+    button.textContent = prompt;
+    button.classList.add('confirming');
+    timer = setTimeout(disarm, 4000);
+  });
+  button.addEventListener('blur', () => { if (timer) disarm(); });
+}
+
+confirmingButton($('removeSelected'), 'Click again to remove', () => removeFiles(selectedFiles()));
+confirmingButton($('clearAll'), 'Click again to clear', () => {
+  state.files = [];
+  state.isExample = false;
+  setStatus('Cleared all files.');
+  syncControls();
+  render();
+});
+confirmingButton($('resetAll'), 'Click again to reset', () => {
+  state.defaults = { ...FACTORY_DEFAULTS };
+  state.svgo = copySvgo(SVGO_DEFAULTS);
+  state.files = exampleFiles();
+  state.isExample = true;
+  setBackground('check');
+  setStatus('Reset files and settings to their defaults.');
+  renderSvgoControls();
+  syncControls();
+  processFiles(state.files);
 });
 
 async function addFiles(entries) {
@@ -1376,11 +1474,113 @@ $('addColorText').addEventListener('input', () => {
     applyField(colorField, value);
   }
 });
+function setBackground(value) {
+  state.bg = value;
+  $('results').className = `results bg-${value}`;
+  for (const radio of document.querySelectorAll('input[name="bg"]')) radio.checked = radio.value === value;
+}
 for (const radio of document.querySelectorAll('input[name="bg"]')) {
   radio.addEventListener('change', () => {
-    state.bg = radio.value;
-    $('results').className = `results bg-${state.bg}`;
+    setBackground(radio.value);
+    scheduleSave();
   });
+}
+
+// ---- SVGO options ----
+
+const SVGO_TOGGLES = [['svgoMultipass', 'multipass'], ['svgoStyleAttrs', 'styleToAttrs'], ['svgoRaster', 'removeRaster'], ['svgoPretty', 'pretty']];
+
+function renderSvgoControls() {
+  for (const [id, key] of SVGO_TOGGLES) $(id).checked = state.svgo[key];
+  $('svgoPrecision').value = state.svgo.precision;
+  $('svgoPrecisionOut').textContent = String(state.svgo.precision);
+  const grid = $('svgoPlugins');
+  if (!grid.children.length) {
+    for (const name of PRESET_PLUGINS) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.plugin = name;
+      box.addEventListener('change', () => {
+        state.svgo.plugins[name] = box.checked;
+        changeSvgo();
+      });
+      label.append(box, name);
+      grid.appendChild(label);
+    }
+  }
+  for (const box of grid.querySelectorAll('input')) box.checked = state.svgo.plugins[box.dataset.plugin];
+  const enabled = PRESET_PLUGINS.filter((name) => state.svgo.plugins[name]).length;
+  $('svgoPluginSummary').textContent = `Preset plugins (${enabled} of ${PRESET_PLUGINS.length} on)`;
+}
+
+function changeSvgo() {
+  renderSvgoControls();
+  scheduleProcess(state.files);
+}
+
+for (const [id, key] of SVGO_TOGGLES) {
+  $(id).addEventListener('change', () => {
+    state.svgo[key] = $(id).checked;
+    changeSvgo();
+  });
+}
+$('svgoPrecision').addEventListener('input', () => {
+  state.svgo.precision = Number($('svgoPrecision').value);
+  changeSvgo();
+});
+$('svgoReset').addEventListener('click', () => {
+  state.svgo = copySvgo(SVGO_DEFAULTS);
+  changeSvgo();
+  setStatus('Reset SVGO options to their defaults.');
+});
+
+// ---- Saved session ----
+// Files and settings live in IndexedDB, since SVG sources quickly outgrow localStorage. It is per browser and may be
+// unavailable (private windows, blocked storage); the page then simply starts fresh each time.
+
+const storeReady = new Promise((resolve) => {
+  setTimeout(() => resolve(null), 2000);
+  try {
+    const request = indexedDB.open('svg-shadow-baker', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('state');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+  } catch {
+    resolve(null);
+  }
+});
+
+async function loadSession() {
+  const db = await storeReady;
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const request = db.transaction('state').objectStore('state').get('session');
+      request.onsuccess = () => resolve(request.result ?? null);
+      request.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+let saveTimer = 0;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const db = await storeReady;
+    if (!db) return;
+    const session = {
+      version: 1,
+      isExample: state.isExample,
+      bg: state.bg,
+      defaults: state.defaults,
+      svgo: state.svgo,
+      files: state.files.map(({ path, name, source, settings, selected, custom }) => ({ path, name, source, settings, selected, custom })),
+    };
+    try { db.transaction('state', 'readwrite').objectStore('state').put(session, 'session'); } catch {}
+  }, 300);
 }
 
 const EXAMPLES = [
@@ -1442,9 +1642,24 @@ state.defaults = Object.fromEntries(FIELDS.map((field) => [field.key, readContro
 const favicon = document.querySelector('link[rel="icon"]') ?? document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'icon' }));
 favicon.type = 'image/svg+xml';
 favicon.href = `data:image/svg+xml,${encodeURIComponent(EXAMPLES[0].source)}`;
-state.files = EXAMPLES.map(({ path, source }) => ({
-  path, name: path.split('/').pop(), source, settings: { ...state.defaults }, selected: false, custom: false,
+const FACTORY_DEFAULTS = { ...state.defaults };
+const exampleFiles = () => EXAMPLES.map(({ path, source }) => ({
+  path, name: path.split('/').pop(), source, settings: { ...FACTORY_DEFAULTS }, selected: false, custom: false,
 }));
+
+const session = await loadSession();
+if (session?.version === 1) {
+  state.defaults = { ...FACTORY_DEFAULTS, ...session.defaults };
+  state.svgo = { ...copySvgo(SVGO_DEFAULTS), ...session.svgo, plugins: { ...SVGO_DEFAULTS.plugins, ...session.svgo?.plugins } };
+  state.isExample = Boolean(session.isExample);
+  state.files = (session.files ?? []).map((file) => ({ ...file, settings: { ...state.defaults, ...file.settings } }));
+  setBackground(session.bg ?? 'check');
+  if (state.files.length && !state.isExample) {
+    setStatus(`Restored ${state.files.length} file${state.files.length > 1 ? 's' : ''} from your last visit.`);
+  }
+} else {
+  state.files = exampleFiles();
+}
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const SUN = 'M12 4V2m0 20v-2m8-8h2M2 12h2m13.66-5.66 1.41-1.41M4.93 19.07l1.41-1.41m0-11.32L4.93 4.93m14.14 14.14-1.41-1.41M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z';
 const MOON = 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z';
@@ -1464,6 +1679,7 @@ $('themeToggle').addEventListener('click', () => {
 darkQuery.addEventListener('change', renderThemeToggle);
 new MutationObserver(renderThemeToggle).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 renderThemeToggle();
+renderSvgoControls();
 syncControls();
 processFiles(state.files);
 </script>

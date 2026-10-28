@@ -24,6 +24,8 @@ Click any preview to see all three full screen. Use the arrow keys or Previous/N
 
 Save files one at a time, or everything as a `.zip` that keeps the folder structure.
 
+Your files and settings are kept in the browser (IndexedDB), so they are still there after a reload. Remove files one at a time, remove the selected ones, or clear them all. **Reset all** brings back the example and every default setting. Clearing, removing a selection and resetting ask for a second click.
+
 ## What it changes
 
 | In the SVG | What happens |
@@ -48,7 +50,7 @@ Filters are parsed primitive by primitive. Figma's export pattern (`feOffset`, `
 
 - **Filter shadows**: strength, softness and extra downward lift for converted filter shadows.
 - **Add a shadow**: give artwork that has no filter a soft dark edge, so light or metallic shapes stand out from their background. Set its colour, blur, opacity and lift.
-- **Output**: turn SVGO minifying on or off. Raster images are only removed while minifying is on.
+- **Output**: turn SVGO minifying on or off per file. While it is on, **SVGO options** (closed until you open it) sets SVGO options for every file: multipass, converting styles to attributes, removing raster images, pretty-printing, decimal places, and each plugin in SVGO's default preset. **Reset SVGO options** restores the defaults. `removeViewBox` is off by default, because Flutter needs the `viewBox` to scale the picture.
 
 ### Per-file settings
 
