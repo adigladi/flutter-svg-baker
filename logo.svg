@@ -1,0 +1,49 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .tile { fill: url(#tileFill); }
+  .top { fill: #ffffff; stroke: #ffffff; stroke-width: 3; stroke-linejoin: round; }
+  .layer { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+  .middle { stroke: #e0e9f9; }
+  .bottom { stroke: #a9c1ec; }
+</style>
+<g filter="url(#tileBevel)">
+  <rect class="tile" x="4" y="4" width="56" height="56" rx="14"/>
+</g>
+<g filter="url(#markShadow)">
+  <path class="top" d="M32 14 50 23 32 32 14 23Z"/>
+  <path class="layer middle" d="M14 32 32 41 50 32"/>
+  <path class="layer bottom" d="M14 41 32 50 50 41"/>
+</g>
+<defs>
+  <filter id="tileBevel" x="4" y="4" width="56" height="56" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+    <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="1"/>
+    <feGaussianBlur stdDeviation="0.75"/>
+    <feComposite in2="hardAlpha" operator="arithmetic" k2="-1" k3="1"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.25 0"/>
+    <feBlend mode="normal" in2="shape" result="effect1_innerShadow"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="-1.5"/>
+    <feGaussianBlur stdDeviation="1"/>
+    <feComposite in2="hardAlpha" operator="arithmetic" k2="-1" k3="1"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.02 0 0 0 0 0.08 0 0 0 0 0.2 0 0 0 0.3 0"/>
+    <feBlend mode="normal" in2="effect1_innerShadow" result="effect2_innerShadow"/>
+  </filter>
+  <filter id="markShadow" x="8" y="10" width="48" height="48" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="2"/>
+    <feGaussianBlur stdDeviation="1.5"/>
+    <feComposite in2="hardAlpha" operator="out"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.04 0 0 0 0 0.14 0 0 0 0 0.31 0 0 0 0.55 0"/>
+    <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+    <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+  </filter>
+  <linearGradient id="tileFill" x1="12" y1="4" x2="52" y2="60" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#3d82ea"/>
+    <stop offset="1" stop-color="#1a4a9e"/>
+  </linearGradient>
+</defs>
+</svg>

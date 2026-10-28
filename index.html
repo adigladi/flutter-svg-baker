@@ -1,0 +1,1437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<meta name="description" content="Bake SVG drop and inner shadows into shapes flutter_svg can draw, inline CSS, strip unsupported elements and minify with SVGO.">
+<title>SVG Shadow Baker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Source+Code+Pro:wght@400;500&family=Source+Sans+3:wght@400;500;600&display=swap">
+<script>
+  try {
+    const savedTheme = localStorage.getItem('shadow-baker-theme');
+    if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+  } catch {}
+</script>
+<style>
+  /* Base reset, matching the frame the page is published in on claude.ai. */
+  :root { color-scheme: light; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+
+  /* Drafting desk: settings rail on the left, drop tray and inspection rows on the right; stacks on phones.
+     Light is grey graph paper with a blue pencil; dark is graphite with a sky-blue pencil. */
+  :root {
+    --bg: #f1f2f3; --grid: #e1e3e6; --surface: #ffffff; --sunken: #f1f2f3;
+    --ink: #1f2328; --muted: #5e646c; --line: #c8ccd1;
+    --accent: #2160c4; --accent-ink: #ffffff; --accent-soft: #dfe9f9;
+    --ok: #23784a; --warn: #93560a; --bad: #c4372d; --focus: #2563eb;
+    --check-a: #ffffff; --check-b: #e6e8eb; --plain-light: #f6f6f6; --plain-dark: #141414; --felt: #1d4a3a;
+    --font-display: 'Sora', 'Helvetica Neue', Arial, sans-serif;
+    --font-body: 'Source Sans 3', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'Source Code Pro', ui-monospace, Menlo, monospace;
+    --radius: 12px; --control-radius: 8px; --rule: 1px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1c1f; --grid: #24272b; --surface: #222529; --sunken: #1a1c1f;
+      --ink: #e7e9ec; --muted: #a2a8b0; --line: #3a3f46;
+      --accent: #6ea8ff; --accent-ink: #14181d; --accent-soft: #1d2f4a;
+      --ok: #6fd39a; --warn: #f3b35b; --bad: #ff8a7d; --focus: #8ab4ff;
+      --check-a: #2b2f34; --check-b: #222529; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1a1c1f; --grid: #24272b; --surface: #222529; --sunken: #1a1c1f;
+    --ink: #e7e9ec; --muted: #a2a8b0; --line: #3a3f46;
+    --accent: #6ea8ff; --accent-ink: #14181d; --accent-soft: #1d2f4a;
+    --ok: #6fd39a; --warn: #f3b35b; --bad: #ff8a7d; --focus: #8ab4ff;
+    --check-a: #2b2f34; --check-b: #222529; color-scheme: dark;
+  }
+
+  body {
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 24px 24px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 24px 24px,
+      var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 var(--font-body);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 24px 48px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; display: grid; gap: 24px; }
+
+  .display { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.025em; }
+  header.masthead { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: start; justify-content: space-between; }
+  .theme-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 12px; }
+  .theme-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  .masthead-text { display: grid; gap: 6px; min-width: 0; flex: 1 1 420px; }
+  .eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: clamp(30px, 4.4vw, 46px); line-height: 1; margin: 0; text-wrap: balance; }
+  .lede { margin: 0; max-width: 68ch; color: var(--muted); }
+  .lede code, .rail code { font: .9em var(--font-mono); color: var(--ink); }
+
+  .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .rail { display: grid; gap: 16px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); }
+  @media (max-width: 860px) { .rail { position: static; } .work { order: -1; } }
+  .panel { background: var(--surface); border: var(--rule) solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 14px; }
+  .panel h2 { font-size: 15px; line-height: 1.2; margin: 0; }
+  .panel p.hint { margin: -6px 0 0; font-size: 13px; color: var(--muted); }
+
+  .field { display: grid; gap: 4px; }
+  .field-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .field label { font-size: 13px; font-weight: 500; }
+  .field output { font: 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+  .check input { margin-top: 3px; accent-color: var(--accent); }
+  .check small { display: block; color: var(--muted); font-size: 12px; }
+  .color-row { display: flex; align-items: center; gap: 10px; }
+  .color-row input[type="color"] { width: 40px; height: 28px; border: 1px solid var(--line); border-radius: var(--control-radius); padding: 0; background: none; }
+  .color-row input[type="text"] { width: 96px; font: 13px var(--font-mono); padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--sunken); color: var(--ink); }
+  .sub { display: grid; gap: 12px; padding-left: 12px; border-left: 2px solid var(--line); }
+  .sub[hidden] { display: none; }
+
+  .support { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
+  .support li { display: grid; grid-template-columns: 112px 1fr; gap: 8px; }
+  .support .tag { font: 12px var(--font-mono); }
+  .support .fate { color: var(--muted); }
+
+  .work { display: grid; gap: 16px; min-width: 0; }
+  .tray {
+    border: var(--rule) dashed var(--line); border-radius: var(--radius); background: var(--surface);
+    padding: 28px 20px; display: grid; justify-items: center; gap: 12px; text-align: center;
+    transition: border-color .15s, background .15s;
+  }
+  .tray.over { border-color: var(--accent); background: var(--accent-soft); }
+  .tray strong { font-size: 20px; line-height: 1.15; }
+  .tray p { margin: 0; color: var(--muted); font-size: 14px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+  button {
+    font: 600 14px/1 var(--font-body); padding: 9px 14px; border-radius: var(--control-radius); cursor: pointer;
+    border: var(--rule) solid var(--line); background: var(--surface); color: var(--ink);
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary:hover { filter: brightness(1.06); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible, .seg label:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  .summary { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .summary b { color: var(--ink); font-weight: 600; }
+  .toolbar .right { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: var(--rule) solid var(--line); border-radius: var(--control-radius); overflow: hidden; background: var(--surface); }
+  .seg label { font-size: 13px; padding: 7px 11px; cursor: pointer; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label:has(input:checked) { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+
+  .status { font-size: 13px; min-height: 1.5em; color: var(--muted); }
+  .status.warn { color: var(--warn); }
+  .banner { border: 1px solid var(--warn); color: var(--warn); border-radius: var(--control-radius); padding: 10px 12px; font-size: 13px; }
+
+  .results { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  .file { background: var(--surface); border: var(--rule) solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; gap: 12px; min-width: 0; }
+  .file-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+  .file-name { font: 500 14px var(--font-mono); overflow-wrap: anywhere; min-width: 0; }
+  .file-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .size { font: 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .chip { font: 500 11px/1 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; padding: 4px 7px; border-radius: var(--control-radius); border: 1px solid currentColor; }
+  .chip.ok { color: var(--ok); }
+  .chip.warn { color: var(--warn); }
+  .chip.bad { color: var(--bad); }
+  .chip.example { color: var(--accent); }
+
+  .previews { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 520px) { .previews { gap: 6px; } }
+  figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
+  figcaption { font: 500 11px/1.2 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .stage { position: relative; aspect-ratio: 1; max-width: 100%; border-radius: var(--control-radius); border: 1px solid var(--line); }
+  .stage img { position: absolute; inset: 8%; width: 84%; height: 84%; object-fit: contain; }
+  .bg-felt .stage { background: var(--felt); border-color: transparent; }
+  .bg-check .stage { background: repeating-conic-gradient(var(--check-a) 0 25%, var(--check-b) 0 50%) 0 0 / 16px 16px; }
+  .bg-light .stage { background: var(--plain-light); }
+  .bg-dark .stage { background: var(--plain-dark); border-color: transparent; }
+
+  .notes { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 2px; }
+  .notes li.warn { color: var(--warn); }
+  .notes li.bad { color: var(--bad); }
+  .file-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .file-actions button { font-size: 13px; padding: 7px 12px; }
+
+  .scope { background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 8px; font-size: 13px; }
+  .scope strong { font-weight: 600; }
+  .scope .scope-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .scope button { font-size: 12px; padding: 6px 10px; }
+  .field output.mixed, .color-row .mixed { color: var(--accent); }
+
+  .selectbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .selectbar .count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .selectbar input[type="text"] { font: 13px var(--font-mono); padding: 7px 10px; border: var(--rule) solid var(--line); border-radius: var(--control-radius); background: var(--surface); color: var(--ink); width: 13rem; max-width: 100%; }
+  .selectbar button { font-size: 13px; padding: 7px 11px; }
+  .file.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .pick { display: flex; gap: 10px; align-items: center; min-width: 0; cursor: pointer; }
+  .pick input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+  .chip.own { color: var(--accent); }
+
+  .stage[role="button"] { cursor: zoom-in; }
+  .stage[role="button"]:hover { border-color: var(--accent); }
+  .stage[role="button"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .viewer {
+    box-sizing: border-box; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0;
+    background: var(--bg); color: var(--ink);
+    padding: calc(env(safe-area-inset-top, 0px) + 16px) max(16px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 16px) max(16px, env(safe-area-inset-left, 0px));
+  }
+  .viewer[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; }
+  .viewer::backdrop { background: rgb(0 0 0 / .5); }
+  .viewer-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .viewer-bar h2 { margin: 0; font-size: 15px; min-width: 0; overflow-wrap: anywhere; flex: 1 1 200px; }
+  .viewer-bar .size { white-space: nowrap; }
+  .viewer-previews { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-height: 0; }
+  .viewer-previews figure { grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+  .viewer-previews .stage { aspect-ratio: auto; height: auto; min-height: 0; border-radius: var(--radius); }
+  .viewer-previews .stage img { inset: 4%; width: 92%; height: 92%; }
+  @media (max-width: 720px) {
+    .viewer[open] { overflow-y: auto; grid-template-rows: auto auto; }
+    .viewer-previews { grid-template-columns: minmax(0, 1fr); min-height: auto; }
+    .viewer-previews figure { grid-template-rows: auto auto; min-height: auto; }
+    .viewer-previews .stage { height: 70dvh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) { .tray { transition: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-text">
+      <span class="eyebrow">flutter_svg prep bench</span>
+      <h1 class="display">SVG Shadow Baker</h1>
+      <p class="lede">Drop SVG files here to make them render the same in Flutter. Drop and inner shadows become layered vector shapes, CSS is inlined, anything <code>flutter_svg</code> would ignore is removed, and SVGO minifies the result. Everything runs in your browser.</p>
+    </div>
+    <button type="button" class="theme-toggle" id="themeToggle" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path id="themeIcon" d=""></path></svg>
+      <span id="themeLabel">Dark mode</span>
+    </button>
+  </header>
+
+  <div class="layout">
+    <aside class="rail">
+      <div class="scope" id="scope" role="status" aria-live="polite"></div>
+      <section class="panel" aria-labelledby="h-filters">
+        <h2 class="display" id="h-filters">Filter shadows</h2>
+        <p class="hint">For drop and inner shadows exported as <code>&lt;filter&gt;</code>.</p>
+        <div class="field">
+          <div class="field-row"><label for="fStrength">Strength</label><output for="fStrength" id="fStrengthOut"></output></div>
+          <input type="range" id="fStrength" min="0.25" max="2" step="0.05" value="1">
+        </div>
+        <div class="field">
+          <div class="field-row"><label for="fSpread">Softness</label><output for="fSpread" id="fSpreadOut"></output></div>
+          <input type="range" id="fSpread" min="0.5" max="2" step="0.05" value="1">
+        </div>
+        <div class="field">
+          <div class="field-row"><label for="fLift">Extra lift</label><output for="fLift" id="fLiftOut"></output></div>
+          <input type="range" id="fLift" min="0" max="2" step="0.1" value="0">
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-add">
+        <h2 class="display" id="h-add">Add a shadow</h2>
+        <label class="check"><input type="checkbox" id="addEnabled" aria-controls="addFields" aria-expanded="false"><span>Shadow artwork that has no filter<small>A soft dark edge that helps light or metallic artwork stand out from its background.</small></span></label>
+        <div class="sub" id="addFields" hidden>
+          <div class="field">
+            <label for="addColorText">Colour</label>
+            <div class="color-row">
+              <input type="color" id="addColor" value="#1f1a17" aria-label="Shadow colour picker">
+              <input type="text" id="addColorText" value="#1f1a17" spellcheck="false">
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-row"><label for="addBlur">Blur</label><output for="addBlur" id="addBlurOut"></output></div>
+            <input type="range" id="addBlur" min="0.25" max="4" step="0.25" value="1">
+          </div>
+          <div class="field">
+            <div class="field-row"><label for="addOpacity">Opacity</label><output for="addOpacity" id="addOpacityOut"></output></div>
+            <input type="range" id="addOpacity" min="0.1" max="1" step="0.05" value="0.9">
+          </div>
+          <div class="field">
+            <div class="field-row"><label for="addLift">Lift</label><output for="addLift" id="addLiftOut"></output></div>
+            <input type="range" id="addLift" min="0" max="2" step="0.1" value="1">
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="h-out">
+        <h2 class="display" id="h-out">Output</h2>
+        <label class="check"><input type="checkbox" id="minify" checked><span>Minify with SVGO<small>SVGO's default preset, keeping <code>viewBox</code> and removing embedded raster images.</small></span></label>
+      </section>
+
+      <section class="panel" aria-labelledby="h-support">
+        <h2 class="display" id="h-support">What Flutter drops</h2>
+        <ul class="support">
+          <li><span class="tag">&lt;filter&gt;</span><span class="fate">Shadows baked as shapes; blurs removed with a warning</span></li>
+          <li><span class="tag">&lt;style&gt;</span><span class="fate">Rules inlined onto elements</span></li>
+          <li><span class="tag">&lt;marker&gt;</span><span class="fate">Removed with a warning</span></li>
+          <li><span class="tag">foreignObject</span><span class="fate">Removed with a warning</span></li>
+          <li><span class="tag">&lt;animate&gt;</span><span class="fate">Removed with a warning</span></li>
+        </ul>
+      </section>
+    </aside>
+
+    <main class="work">
+      <div class="tray" id="tray">
+        <strong class="display">Drop SVG files or folders</strong>
+        <p>Folder structure is kept when you save everything as a .zip.</p>
+        <div class="buttons">
+          <button type="button" class="primary" id="pickFiles">Choose files</button>
+          <button type="button" id="pickFolder">Choose folder</button>
+        </div>
+        <input type="file" id="fileInput" accept=".svg,image/svg+xml" multiple hidden>
+        <input type="file" id="folderInput" webkitdirectory multiple hidden>
+      </div>
+
+      <div id="libBanner" class="banner" hidden></div>
+
+      <div class="toolbar">
+        <div class="summary" id="summary"></div>
+        <div class="right">
+          <div class="seg" role="radiogroup" aria-label="Preview background">
+            <label><input type="radio" name="bg" value="check" checked>Checker</label>
+            <label><input type="radio" name="bg" value="felt">Green</label>
+            <label><input type="radio" name="bg" value="light">Light</label>
+            <label><input type="radio" name="bg" value="dark">Dark</label>
+          </div>
+          <button type="button" class="primary" id="saveAll">Save all (.zip)</button>
+          <button type="button" id="clearAll">Clear</button>
+        </div>
+      </div>
+      <div class="selectbar" aria-label="Select files">
+        <button type="button" id="selectAll">Select all</button>
+        <button type="button" id="selectNone">Select none</button>
+        <input type="text" id="matchText" placeholder="negative_*  or  icons/" spellcheck="false" aria-label="Select files whose path matches">
+        <button type="button" id="selectMatches">Select matches</button>
+        <span class="count" id="selectCount"></span>
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+
+      <ol class="results bg-check" id="results"></ol>
+    </main>
+  </div>
+  <svg id="scratch" width="0" height="0" aria-hidden="true" style="position:absolute"></svg>
+  <dialog class="viewer" id="viewer" aria-labelledby="viewerTitle">
+    <div class="viewer-bar">
+      <h2 class="file-name" id="viewerTitle"></h2>
+      <span class="size" id="viewerPosition"></span>
+      <button type="button" id="viewerPrevious">Previous</button>
+      <button type="button" id="viewerNext">Next</button>
+      <button type="button" class="primary" id="viewerClose">Close</button>
+    </div>
+    <div class="viewer-previews" id="viewerPreviews"></div>
+  </dialog>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script type="module">
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const XLINK_NS = 'http://www.w3.org/1999/xlink';
+const $ = (id) => document.getElementById(id);
+
+let optimize = null;
+try {
+  ({ optimize } = await import('https://cdn.jsdelivr.net/npm/svgo@3.3.2/dist/svgo.browser.js'));
+} catch {
+  const banner = $('libBanner');
+  banner.hidden = false;
+  banner.textContent = 'SVGO could not load, so CSS inlining and minifying are off. Reload the page to try again.';
+}
+
+const downloadsReady = window.claude?.use ? window.claude.use('downloads').catch(() => null) : Promise.resolve(null);
+
+// A blur is approximated by evenly spaced bands out to SHADOW_REACH blur radii; past 3 radii a Gaussian has under 0.2% left.
+const SHADOW_LAYERS = 8;
+const SHADOW_REACH = 3;
+const PAINTED = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'line', 'text', 'tspan']);
+const FILLABLE = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline']);
+const NON_RENDERED = new Set(['defs', 'title', 'desc', 'metadata', 'style', 'clipPath', 'mask', 'linearGradient', 'radialGradient', 'pattern', 'symbol', 'filter', 'marker', 'script']);
+const ANIMATIONS = ['animate', 'animateTransform', 'animateMotion', 'animateColor', 'set'];
+
+const fmt = (n) => String(Math.round(n * 1000) / 1000);
+const num = (value, fallback = 0) => {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const kb = (bytes) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+
+const colorContext = document.createElement('canvas').getContext('2d');
+function normalizeColor(value, fallback = '#000000') {
+  colorContext.fillStyle = fallback;
+  colorContext.fillStyle = value || fallback;
+  const style = colorContext.fillStyle;
+  if (style.startsWith('#')) return { color: style, alpha: 1 };
+  const parts = style.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 1];
+  return { color: rgbHex(parts[0] / 255, parts[1] / 255, parts[2] / 255), alpha: parts[3] ?? 1 };
+}
+function rgbHex(r, g, b) {
+  const channel = (v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+function styleProperty(element, name) {
+  const style = element.getAttribute('style');
+  if (!style) return null;
+  for (const declaration of style.split(';')) {
+    const index = declaration.indexOf(':');
+    if (index > 0 && declaration.slice(0, index).trim() === name) return declaration.slice(index + 1).trim();
+  }
+  return null;
+}
+function removeStyleProperties(element, names) {
+  const style = element.getAttribute('style');
+  if (!style) return;
+  const kept = style.split(';').filter((declaration) => {
+    const name = declaration.split(':')[0]?.trim();
+    return name && !names.includes(name);
+  });
+  if (kept.length) element.setAttribute('style', kept.join(';'));
+  else element.removeAttribute('style');
+}
+function paintOf(element, name, fallback) {
+  for (let node = element; node && node.nodeType === 1; node = node.parentNode) {
+    const value = styleProperty(node, name) ?? node.getAttribute(name);
+    if (value && value !== 'inherit') return value;
+  }
+  return fallback;
+}
+
+const scratch = $('scratch');
+function matrixOf(transform) {
+  if (!transform) return new DOMMatrix();
+  const group = document.createElementNS(SVG_NS, 'g');
+  group.setAttribute('transform', transform);
+  scratch.appendChild(group);
+  const consolidated = group.transform.baseVal.consolidate();
+  group.remove();
+  return consolidated ? DOMMatrix.fromMatrix(consolidated.matrix) : new DOMMatrix();
+}
+
+function shapeToPathData(shape) {
+  const attr = (name) => num(shape.getAttribute(name));
+  switch (shape.localName) {
+    case 'path': return shape.getAttribute('d');
+    case 'rect': {
+      const x = attr('x'), y = attr('y'), width = attr('width'), height = attr('height');
+      if (width <= 0 || height <= 0) return null;
+      let rx = shape.hasAttribute('rx') ? attr('rx') : attr('ry');
+      let ry = shape.hasAttribute('ry') ? attr('ry') : rx;
+      rx = Math.min(rx, width / 2); ry = Math.min(ry, height / 2);
+      if (!rx || !ry) return `M${x} ${y}h${width}v${height}h${-width}z`;
+      return `M${x + rx} ${y}h${width - 2 * rx}a${rx} ${ry} 0 0 1 ${rx} ${ry}v${height - 2 * ry}a${rx} ${ry} 0 0 1 ${-rx} ${ry}h${-(width - 2 * rx)}a${rx} ${ry} 0 0 1 ${-rx} ${-ry}v${-(height - 2 * ry)}a${rx} ${ry} 0 0 1 ${rx} ${-ry}z`;
+    }
+    case 'circle':
+    case 'ellipse': {
+      const cx = attr('cx'), cy = attr('cy');
+      const rx = shape.localName === 'circle' ? attr('r') : attr('rx');
+      const ry = shape.localName === 'circle' ? attr('r') : attr('ry');
+      if (rx <= 0 || ry <= 0) return null;
+      return `M${cx - rx} ${cy}a${rx} ${ry} 0 1 0 ${2 * rx} 0a${rx} ${ry} 0 1 0 ${-2 * rx} 0z`;
+    }
+    case 'polygon':
+    case 'polyline': {
+      const points = (shape.getAttribute('points') || '').trim();
+      return points ? `M${points}z` : null;
+    }
+    default: return null;
+  }
+}
+
+// 1 - Phi(x): how much of a Gaussian blur's edge is left at x radii past the edge (Abramowitz & Stegun 7.1.26).
+function gaussianTail(x) {
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * z);
+  const erfc = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-z * z);
+  return x >= 0 ? erfc / 2 : 1 - erfc / 2;
+}
+
+// Layer k is a stroke reaching `outer` past the edge. Band k (between its reach and the next layer's) is covered by
+// layers 0..k, so each layer's opacity is solved, outermost first, to make that band as dark as a real blur is there.
+function layerPlan(effect, tuning) {
+  const sigma = effect.sigma * tuning.softness;
+  const spread = Math.abs(effect.spread || 0);
+  const alpha = Math.min(1, effect.alpha * tuning.strength);
+  if (sigma < 0.05) return [{ width: 2 * spread, alpha, dx: effect.dx, dy: effect.dy }];
+  const reach = SHADOW_REACH * sigma;
+  const layers = [];
+  let clear = 1;
+  for (let k = 0; k < SHADOW_LAYERS; k++) {
+    const outer = reach * (SHADOW_LAYERS - k) / SHADOW_LAYERS;
+    const inner = reach * (SHADOW_LAYERS - k - 1) / SHADOW_LAYERS;
+    const target = alpha * gaussianTail((outer + inner) / 2 / sigma);
+    const layerAlpha = Math.max(0, 1 - (1 - target) / clear);
+    clear *= 1 - layerAlpha;
+    layers.push({
+      width: 2 * (spread + outer),
+      alpha: layerAlpha,
+      dx: effect.dx,
+      dy: effect.dy + tuning.lift * sigma * (0.4 + 1.2 * outer / reach),
+    });
+  }
+  return layers.filter((layer) => layer.alpha > 0.002);
+}
+
+function parseFilter(filter) {
+  const effects = [];
+  const unsupported = new Set();
+  let current = null, pendingBlur = null, pendingSpread = 0, pendingColor = null;
+  const blurOf = (primitive) => {
+    const values = (primitive.getAttribute('stdDeviation') || '0').trim().split(/[\s,]+/).map(Number);
+    return values.length > 1 ? (values[0] + values[1]) / 2 : values[0] || 0;
+  };
+
+  for (const primitive of filter.children) {
+    const read = (name) => primitive.getAttribute(name) ?? styleProperty(primitive, name);
+    switch (primitive.localName) {
+      case 'feDropShadow': {
+        const flood = normalizeColor(read('flood-color'));
+        effects.push({ type: 'drop', dx: num(read('dx'), 2), dy: num(read('dy'), 2), sigma: blurOf(primitive), spread: 0, color: flood.color, alpha: num(read('flood-opacity'), 1) * flood.alpha });
+        current = null;
+        break;
+      }
+      case 'feMorphology':
+        pendingSpread = num(read('radius'));
+        break;
+      case 'feOffset':
+        current = { type: 'drop', dx: num(read('dx')), dy: num(read('dy')), sigma: pendingBlur ?? 0, spread: pendingSpread, color: pendingColor?.color ?? '#000000', alpha: pendingColor?.alpha ?? 1 };
+        effects.push(current);
+        pendingBlur = null; pendingSpread = 0; pendingColor = null;
+        break;
+      case 'feGaussianBlur': {
+        const input = read('in') || '';
+        if (input.startsWith('BackgroundImage')) { unsupported.add('background blur'); break; }
+        if (current) current.sigma = blurOf(primitive);
+        else pendingBlur = blurOf(primitive);
+        break;
+      }
+      case 'feComposite':
+        if (current && read('operator') === 'arithmetic' && num(read('k2')) < 0) current.type = 'inner';
+        break;
+      case 'feColorMatrix': {
+        const type = read('type') || 'matrix';
+        if (type !== 'matrix') { unsupported.add(`feColorMatrix (${type})`); break; }
+        const values = (read('values') || '').trim().split(/[\s,]+/).map(Number);
+        if (values.length === 20 && values[18] !== 127) {
+          const tint = { color: rgbHex(values[4], values[9], values[14]), alpha: values[18] };
+          if (current) Object.assign(current, tint); else pendingColor = tint;
+        }
+        break;
+      }
+      case 'feFlood': {
+        const flood = normalizeColor(read('flood-color'));
+        const alpha = num(read('flood-opacity'), 1) * flood.alpha;
+        if (alpha > 0) {
+          const tint = { color: flood.color, alpha };
+          if (current) Object.assign(current, tint); else pendingColor = tint;
+        }
+        break;
+      }
+      case 'feBlend':
+      case 'feMerge':
+        current = null;
+        break;
+      default:
+        unsupported.add(primitive.localName);
+    }
+  }
+  if (pendingBlur !== null && !effects.length) unsupported.add('layer blur');
+  return { effects, unsupported };
+}
+
+function filterIdOf(element) {
+  const value = element.getAttribute('filter') ?? styleProperty(element, 'filter');
+  return value?.match(/url\(\s*['"]?#([^'")\s]+)['"]?\s*\)/)?.[1] ?? null;
+}
+function clearFilter(element) {
+  element.removeAttribute('filter');
+  removeStyleProperties(element, ['filter']);
+}
+function stripIds(element) {
+  element.removeAttribute('id');
+  for (const child of element.querySelectorAll('[id]')) child.removeAttribute('id');
+}
+
+function silhouette(original, color, extraWidth, warnings) {
+  const clone = original.cloneNode(true);
+  paintSilhouette(original, clone, color, extraWidth, warnings);
+  stripIds(clone);
+  return clone;
+}
+function paintSilhouette(original, clone, color, extraWidth, warnings) {
+  const tag = clone.localName;
+  if (tag === 'image' || tag === 'use' || tag === 'foreignObject') {
+    warnings.add(`<${tag}> elements are left out of baked shadows`);
+    clone.remove();
+    return;
+  }
+  for (const name of ['filter', 'opacity', 'fill-opacity', 'stroke-opacity', 'mix-blend-mode']) clone.removeAttribute(name);
+  removeStyleProperties(clone, ['filter', 'opacity', 'fill-opacity', 'stroke-opacity', 'mix-blend-mode', 'fill', 'stroke', 'stroke-width']);
+  if (PAINTED.has(tag)) {
+    const fill = paintOf(original, 'fill', 'black');
+    const stroke = paintOf(original, 'stroke', 'none');
+    const strokeWidth = stroke === 'none' ? 0 : num(paintOf(original, 'stroke-width', '1'), 1);
+    clone.setAttribute('fill', fill === 'none' ? 'none' : color);
+    const totalWidth = strokeWidth + extraWidth;
+    if (totalWidth > 0) {
+      clone.setAttribute('stroke', color);
+      clone.setAttribute('stroke-width', fmt(totalWidth));
+      clone.setAttribute('stroke-linejoin', 'round');
+    } else {
+      clone.setAttribute('stroke', 'none');
+      clone.removeAttribute('stroke-width');
+    }
+  } else {
+    clone.removeAttribute('fill');
+    clone.removeAttribute('stroke');
+    clone.removeAttribute('stroke-width');
+  }
+  const originalChildren = [...original.children];
+  const cloneChildren = [...clone.children];
+  originalChildren.forEach((child, index) => paintSilhouette(child, cloneChildren[index], color, extraWidth, warnings));
+}
+
+function bakeDropShadow(doc, element, effect, tuning, warnings) {
+  const wrapper = doc.createElementNS(SVG_NS, 'g');
+  for (const layer of layerPlan(effect, tuning)) {
+    const shadow = silhouette(element, effect.color, layer.width, warnings);
+    const offset = `translate(${fmt(layer.dx)} ${fmt(layer.dy)})`;
+    shadow.setAttribute('transform', `${element.getAttribute('transform') || ''} ${offset}`.trim());
+    shadow.setAttribute('opacity', fmt(layer.alpha));
+    wrapper.appendChild(shadow);
+  }
+  element.parentNode.insertBefore(wrapper, element);
+}
+
+function bakeRootShadow(doc, root, effect, tuning, warnings) {
+  const artwork = [...root.children].filter((node) => !NON_RENDERED.has(node.localName));
+  if (!artwork.length) return false;
+  const wrapper = doc.createElementNS(SVG_NS, 'g');
+  for (const layer of layerPlan(effect, tuning)) {
+    const group = doc.createElementNS(SVG_NS, 'g');
+    group.setAttribute('opacity', fmt(layer.alpha));
+    group.setAttribute('transform', `translate(${fmt(layer.dx)} ${fmt(layer.dy)})`);
+    for (const node of artwork) group.appendChild(silhouette(node, effect.color, layer.width, warnings));
+    wrapper.appendChild(group);
+  }
+  root.insertBefore(wrapper, artwork[0]);
+  return true;
+}
+
+function isInsideNonRendered(node, stopAt) {
+  for (let parent = node.parentNode; parent && parent !== stopAt; parent = parent.parentNode) {
+    if (NON_RENDERED.has(parent.localName)) return true;
+  }
+  return false;
+}
+
+function fillableShapes(element) {
+  return FILLABLE.has(element.localName)
+    ? [element]
+    : [...element.querySelectorAll([...FILLABLE].join(','))].filter((shape) => !isInsideNonRendered(shape, element));
+}
+
+// Clip paths may only hold plain shapes in flutter_svg, so each shape gets its own clip in its own coordinate space.
+// The shapes are collected before any shadow is baked, so a second effect never shadows the first one's paths.
+function bakeInnerShadow(doc, defs, element, shapes, effect, tuning, nextId) {
+  const plan = layerPlan(effect, tuning);
+  let baked = 0;
+  for (const shape of shapes) {
+    if (paintOf(shape, 'fill', 'black') === 'none') continue;
+    const pathData = shapeToPathData(shape);
+    if (!pathData) continue;
+
+    let matrix = new DOMMatrix();
+    const chain = [];
+    for (let node = shape; node && node !== element; node = node.parentNode) chain.unshift(node.getAttribute('transform'));
+    for (const transform of chain) matrix = matrix.multiply(matrixOf(transform));
+    const inverse = matrix.inverse();
+    const scale = Math.sqrt(Math.abs(matrix.a * matrix.d - matrix.b * matrix.c)) || 1;
+
+    const clipId = nextId();
+    const clipPath = doc.createElementNS(SVG_NS, 'clipPath');
+    clipPath.setAttribute('id', clipId);
+    const clipShape = doc.createElementNS(SVG_NS, 'path');
+    clipShape.setAttribute('d', pathData);
+    if (paintOf(shape, 'fill-rule', 'nonzero') === 'evenodd') clipShape.setAttribute('clip-rule', 'evenodd');
+    clipPath.appendChild(clipShape);
+    defs.appendChild(clipPath);
+
+    const outer = doc.createElementNS(SVG_NS, 'g');
+    const shapeTransform = shape.getAttribute('transform');
+    if (shapeTransform) outer.setAttribute('transform', shapeTransform);
+    const clipped = doc.createElementNS(SVG_NS, 'g');
+    clipped.setAttribute('clip-path', `url(#${clipId})`);
+    outer.appendChild(clipped);
+
+    for (const layer of plan) {
+      const dx = inverse.a * layer.dx + inverse.c * layer.dy;
+      const dy = inverse.b * layer.dx + inverse.d * layer.dy;
+      const hole = doc.createElementNS(SVG_NS, 'path');
+      hole.setAttribute('d', `M-100000 -100000H100000V100000H-100000Z ${pathData}`);
+      hole.setAttribute('fill-rule', 'evenodd');
+      hole.setAttribute('fill', effect.color);
+      if (layer.width > 0) {
+        hole.setAttribute('stroke', effect.color);
+        hole.setAttribute('stroke-width', fmt(layer.width / scale));
+        hole.setAttribute('stroke-linejoin', 'round');
+      }
+      hole.setAttribute('opacity', fmt(layer.alpha));
+      hole.setAttribute('transform', `translate(${fmt(dx)} ${fmt(dy)})`);
+      clipped.appendChild(hole);
+    }
+    shape.parentNode.insertBefore(outer, shape.nextSibling);
+    baked++;
+  }
+  return baked;
+}
+
+function parseSvg(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (doc.querySelector('parsererror') || root.localName !== 'svg') throw new Error('This file is not valid SVG markup.');
+  return doc;
+}
+
+function removeUnsupported(root, warnings) {
+  const foreign = root.querySelectorAll('foreignObject');
+  if (foreign.length) warnings.add(`Removed ${foreign.length} foreignObject element${foreign.length > 1 ? 's' : ''} (HTML content)`);
+  foreign.forEach((node) => node.remove());
+
+  const markers = root.querySelectorAll('marker');
+  if (markers.length) warnings.add('Removed line markers (arrowheads and similar)');
+  markers.forEach((node) => node.remove());
+  for (const node of root.querySelectorAll('[marker-start],[marker-mid],[marker-end]')) {
+    ['marker-start', 'marker-mid', 'marker-end'].forEach((name) => node.removeAttribute(name));
+  }
+
+  const animations = root.querySelectorAll(ANIMATIONS.join(','));
+  if (animations.length) warnings.add('Removed SMIL animations');
+  animations.forEach((node) => node.remove());
+}
+
+function flutterView(source) {
+  const doc = parseSvg(source);
+  const root = doc.documentElement;
+  for (const node of root.querySelectorAll('[filter],[style*="filter"]')) clearFilter(node);
+  root.querySelectorAll('filter,style,foreignObject,marker').forEach((node) => node.remove());
+  root.querySelectorAll(ANIMATIONS.join(',')).forEach((node) => node.remove());
+  return new XMLSerializer().serializeToString(doc);
+}
+
+function convert(source, settings) {
+  const notes = [];
+  const warnings = new Set();
+  let text = source;
+
+  if (/<style[\s>]/i.test(text)) {
+    if (optimize) {
+      text = optimize(text, {
+        plugins: [{ name: 'inlineStyles', params: { onlyMatchedOnce: false } }, 'removeStyleElement'],
+        js2svg: { pretty: true },
+      }).data;
+      notes.push('Inlined CSS from <style>');
+    } else {
+      warnings.add('<style> rules could not be inlined without SVGO and will be ignored by Flutter');
+    }
+  }
+
+  const doc = parseSvg(text);
+  const root = doc.documentElement;
+  let defs = root.querySelector(':scope > defs');
+  if (!defs) {
+    defs = doc.createElementNS(SVG_NS, 'defs');
+    root.insertBefore(defs, root.firstChild);
+  }
+  let idCounter = 0;
+  const nextId = () => {
+    let id;
+    do id = `baked-${++idCounter}`; while (doc.getElementById(id));
+    return id;
+  };
+
+  const tuning = { strength: settings.strength, softness: settings.softness, lift: settings.lift };
+  let drops = 0, inners = 0;
+  const filtered = [...root.querySelectorAll('[filter],[style*="filter"]')];
+  for (const element of filtered) {
+    const id = filterIdOf(element);
+    clearFilter(element);
+    if (!id || isInsideNonRendered(element, root)) continue;
+    const filter = root.querySelector(`filter[id="${CSS.escape(id)}"]`);
+    if (!filter) continue;
+    const { effects, unsupported } = parseFilter(filter);
+    for (const name of unsupported) warnings.add(`Removed unsupported filter effect: ${name}`);
+    const isRoot = element === root;
+    const innerShapes = fillableShapes(element);
+    for (const effect of effects.filter((e) => e.type === 'drop')) {
+      if (isRoot) bakeRootShadow(doc, root, effect, tuning, warnings);
+      else bakeDropShadow(doc, element, effect, tuning, warnings);
+      drops++;
+    }
+    for (const effect of effects.filter((e) => e.type === 'inner')) {
+      if (bakeInnerShadow(doc, defs, element, innerShapes, effect, tuning, nextId)) inners++;
+    }
+  }
+  const filterCount = root.querySelectorAll('filter').length;
+  root.querySelectorAll('filter').forEach((node) => node.remove());
+  if (drops) notes.push(`Baked ${drops} drop shadow${drops > 1 ? 's' : ''}`);
+  if (inners) notes.push(`Baked ${inners} inner shadow${inners > 1 ? 's' : ''}`);
+
+  let added = false;
+  if (settings.add.enabled && !filterCount && !filtered.length) {
+    added = bakeRootShadow(doc, root, {
+      dx: 0, dy: 0, sigma: settings.add.blur, spread: 0, color: settings.add.color, alpha: settings.add.opacity,
+    }, { strength: 1, softness: 1, lift: settings.add.lift }, warnings);
+    if (added) notes.push('Added a soft shadow to the artwork');
+  }
+
+  removeUnsupported(root, warnings);
+  if (!defs.children.length) defs.remove();
+
+  if (settings.minify && optimize) {
+    // SVGO's removeRasterImages only checks xlink:href, which misses SVG 2 exports that use plain href.
+    const rasterImages = [...root.querySelectorAll('image')].filter((image) =>
+      /(\.|image\/)(jpe?g|png|gif)/.test(image.getAttribute('href') ?? image.getAttributeNS(XLINK_NS, 'href') ?? ''));
+    rasterImages.forEach((image) => image.remove());
+    if (rasterImages.length) {
+      warnings.add(`Removed ${rasterImages.length} raster image${rasterImages.length > 1 ? 's' : ''} (PNG, JPEG or GIF)`);
+    }
+  }
+
+  let output = new XMLSerializer().serializeToString(doc);
+  if (settings.minify && optimize) {
+    output = optimize(output, {
+      multipass: true,
+      plugins: [{ name: 'preset-default', params: { overrides: { removeViewBox: false } } }, 'convertStyleToAttrs'],
+    }).data;
+    notes.push('Minified with SVGO');
+  }
+  return { output, notes, warnings: [...warnings], changed: drops + inners > 0 || added };
+}
+
+// ---- State and UI ----
+
+// Each file keeps its own settings. The rail edits the selected files, or every file when none is selected.
+const trim = (value) => Number(value).toFixed(2).replace(/\.?0+$/, '') || '0';
+const FIELDS = [
+  { key: 'strength', id: 'fStrength', kind: 'range', output: 'fStrengthOut', show: (v) => `${trim(v)}\u00d7` },
+  { key: 'softness', id: 'fSpread', kind: 'range', output: 'fSpreadOut', show: (v) => `${trim(v)}\u00d7` },
+  { key: 'lift', id: 'fLift', kind: 'range', output: 'fLiftOut', show: trim },
+  { key: 'addEnabled', id: 'addEnabled', kind: 'check' },
+  { key: 'addColor', id: 'addColor', kind: 'color' },
+  { key: 'addBlur', id: 'addBlur', kind: 'range', output: 'addBlurOut', show: trim },
+  { key: 'addOpacity', id: 'addOpacity', kind: 'range', output: 'addOpacityOut', show: (v) => `${Math.round(v * 100)}%` },
+  { key: 'addLift', id: 'addLift', kind: 'range', output: 'addLiftOut', show: trim },
+  { key: 'minify', id: 'minify', kind: 'check' },
+];
+
+const state = { files: [], isExample: true, bg: 'check', defaults: null };
+const urls = new Set();
+
+function readControl(field) {
+  const control = $(field.id);
+  if (field.kind === 'check') return control.checked;
+  if (field.kind === 'color') return control.value;
+  return parseFloat(control.value);
+}
+
+function toConvertSettings(settings) {
+  return {
+    strength: settings.strength,
+    softness: settings.softness,
+    lift: settings.lift,
+    add: { enabled: settings.addEnabled, color: settings.addColor, blur: settings.addBlur, opacity: settings.addOpacity, lift: settings.addLift },
+    minify: settings.minify,
+  };
+}
+
+const selectedFiles = () => state.files.filter((file) => file.selected);
+const targetFiles = () => {
+  const selected = selectedFiles();
+  return selected.length ? selected : state.files;
+};
+
+function syncControls() {
+  const targets = targetFiles();
+  const sources = targets.length ? targets.map((file) => file.settings) : [state.defaults];
+  for (const field of FIELDS) {
+    const values = sources.map((settings) => settings[field.key]);
+    const isMixed = values.some((value) => value !== values[0]);
+    const control = $(field.id);
+    if (field.kind === 'check') {
+      control.checked = values[0];
+      control.indeterminate = isMixed;
+    } else {
+      control.value = values[0];
+    }
+    if (field.kind === 'color') {
+      $('addColorText').value = isMixed ? 'mixed' : values[0];
+      $('addColorText').classList.toggle('mixed', isMixed);
+    }
+    if (field.output) {
+      const output = $(field.output);
+      output.textContent = isMixed ? 'mixed' : field.show(values[0]);
+      output.classList.toggle('mixed', isMixed);
+    }
+  }
+  const isAddOpen = $('addEnabled').checked || $('addEnabled').indeterminate;
+  $('addFields').hidden = !isAddOpen;
+  $('addEnabled').setAttribute('aria-expanded', String(isAddOpen));
+  renderScope();
+}
+
+function renderScope() {
+  const selected = selectedFiles();
+  const total = state.files.length;
+  const scope = $('scope');
+  scope.replaceChildren();
+  const text = document.createElement('span');
+  const strong = document.createElement('strong');
+  if (selected.length) {
+    strong.textContent = `${selected.length} selected file${selected.length > 1 ? 's' : ''}`;
+    text.append('Settings below change only ', strong, '.');
+    const actions = document.createElement('div');
+    actions.className = 'scope-actions';
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.textContent = 'Use shared settings';
+    reset.addEventListener('click', () => {
+      for (const file of selected) { file.settings = { ...state.defaults }; file.custom = false; }
+      syncControls();
+      processFiles(selected);
+    });
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.textContent = 'Clear selection';
+    clear.addEventListener('click', () => setSelection(() => false));
+    actions.append(reset, clear);
+    scope.append(text, actions);
+  } else {
+    strong.textContent = total ? `all ${total} file${total === 1 ? '' : 's'}` : 'every file you add';
+    text.append('Settings below apply to ', strong, '. Select files to give them their own.');
+    scope.append(text);
+  }
+}
+
+function applyField(field, value) {
+  const selected = selectedFiles();
+  const targets = selected.length ? selected : state.files;
+  if (!selected.length) state.defaults[field.key] = value;
+  for (const file of targets) {
+    file.settings[field.key] = value;
+    if (selected.length) file.custom = true;
+  }
+  syncControls();
+  scheduleProcess(targets);
+}
+
+function processFiles(files) {
+  for (const file of files) {
+    try {
+      const result = convert(file.source, toConvertSettings(file.settings));
+      Object.assign(file, result, { error: null, flutter: flutterView(file.source) });
+    } catch (error) {
+      Object.assign(file, { output: null, notes: [], warnings: [], changed: false, error: error.message || String(error), flutter: null });
+    }
+  }
+  render();
+}
+
+function blobUrl(text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+  urls.add(url);
+  return url;
+}
+
+function figure(caption, text, alt, onOpen) {
+  const fig = document.createElement('figure');
+  const stage = document.createElement('div');
+  stage.className = 'stage';
+  if (onOpen && text) {
+    stage.setAttribute('role', 'button');
+    stage.tabIndex = 0;
+    stage.setAttribute('aria-label', `Enlarge ${alt}`);
+    stage.addEventListener('click', onOpen);
+    stage.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); }
+    });
+  }
+  if (text) {
+    const img = document.createElement('img');
+    img.src = blobUrl(text);
+    img.alt = alt;
+    stage.appendChild(img);
+  }
+  const cap = document.createElement('figcaption');
+  cap.textContent = caption;
+  fig.append(stage, cap);
+  return fig;
+}
+
+function previewFigures(file, onOpen) {
+  return [
+    figure('Browser', file.source, `${file.name} as designed`, onOpen),
+    figure('Flutter today', file.flutter, `${file.name} as flutter_svg draws the original`, onOpen),
+    figure('Baked', file.output, `${file.name} after conversion`, onOpen),
+  ];
+}
+
+const viewer = $('viewer');
+let viewerFile = null;
+const viewableFiles = () => state.files.filter((file) => !file.error);
+
+function openViewer(file) {
+  viewerFile = file;
+  const files = viewableFiles();
+  const index = files.indexOf(file);
+  $('viewerTitle').textContent = file.path;
+  $('viewerPosition').textContent = `${index + 1} of ${files.length}`;
+  $('viewerPrevious').disabled = files.length < 2;
+  $('viewerNext').disabled = files.length < 2;
+  const previews = $('viewerPreviews');
+  previews.className = `viewer-previews bg-${state.bg}`;
+  previews.replaceChildren(...previewFigures(file));
+  if (!viewer.open) viewer.showModal();
+}
+
+function stepViewer(direction) {
+  const files = viewableFiles();
+  if (files.length < 2) return;
+  const index = files.indexOf(viewerFile);
+  openViewer(files[(index + direction + files.length) % files.length]);
+}
+
+$('viewerClose').addEventListener('click', () => viewer.close());
+$('viewerPrevious').addEventListener('click', () => stepViewer(-1));
+$('viewerNext').addEventListener('click', () => stepViewer(1));
+viewer.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowLeft') stepViewer(-1);
+  if (event.key === 'ArrowRight') stepViewer(1);
+});
+viewer.addEventListener('click', (event) => {
+  if (event.target === viewer) viewer.close();
+});
+
+function chip(text, kind) {
+  const span = document.createElement('span');
+  span.className = `chip ${kind}`;
+  span.textContent = text;
+  return span;
+}
+
+function render() {
+  for (const url of urls) URL.revokeObjectURL(url);
+  urls.clear();
+  const list = $('results');
+  list.className = `results bg-${state.bg}`;
+  list.replaceChildren();
+
+  let baked = 0, warned = 0, failed = 0;
+  for (const file of state.files) {
+    const item = document.createElement('li');
+    item.className = 'file';
+
+    const head = document.createElement('div');
+    head.className = 'file-head';
+    item.classList.toggle('selected', Boolean(file.selected));
+    const name = document.createElement('label');
+    name.className = 'pick';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = Boolean(file.selected);
+    box.setAttribute('aria-label', `Select ${file.path}`);
+    box.addEventListener('change', () => {
+      file.selected = box.checked;
+      item.classList.toggle('selected', box.checked);
+      syncControls();
+      renderSelectCount();
+    });
+    const path = document.createElement('span');
+    path.className = 'file-name';
+    path.textContent = file.path;
+    name.append(box, path);
+    const meta = document.createElement('div');
+    meta.className = 'file-meta';
+    if (state.isExample) meta.appendChild(chip('Example', 'example'));
+    if (file.custom) meta.appendChild(chip('Own settings', 'own'));
+    if (file.error) {
+      failed++;
+      meta.appendChild(chip('Failed', 'bad'));
+    } else {
+      const size = document.createElement('span');
+      size.className = 'size';
+      size.textContent = `${kb(new Blob([file.source]).size)} \u2192 ${kb(new Blob([file.output]).size)}`;
+      meta.appendChild(size);
+      if (file.changed) { baked++; meta.appendChild(chip('Shadows baked', 'ok')); }
+      if (file.warnings.length) { warned++; meta.appendChild(chip(`${file.warnings.length} warning${file.warnings.length > 1 ? 's' : ''}`, 'warn')); }
+      if (!file.changed && !file.warnings.length) meta.appendChild(chip('Flutter-ready', 'ok'));
+    }
+    head.append(name, meta);
+    item.appendChild(head);
+
+    if (file.error) {
+      const notes = document.createElement('ul');
+      notes.className = 'notes';
+      const line = document.createElement('li');
+      line.className = 'bad';
+      line.textContent = `${file.error} Check that the file opens in a browser.`;
+      notes.appendChild(line);
+      item.appendChild(notes);
+      list.appendChild(item);
+      continue;
+    }
+
+    const previews = document.createElement('div');
+    previews.className = 'previews';
+    previews.append(...previewFigures(file, () => openViewer(file)));
+    item.appendChild(previews);
+
+    if (file.notes.length || file.warnings.length) {
+      const notes = document.createElement('ul');
+      notes.className = 'notes';
+      for (const text of file.notes) {
+        const line = document.createElement('li');
+        line.textContent = text;
+        notes.appendChild(line);
+      }
+      for (const text of file.warnings) {
+        const line = document.createElement('li');
+        line.className = 'warn';
+        line.textContent = text;
+        notes.appendChild(line);
+      }
+      item.appendChild(notes);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'file-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save SVG';
+    save.addEventListener('click', () => saveFile(file.name, file.output));
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy SVG';
+    copy.addEventListener('click', () => copyText(file.output, file.name));
+    actions.append(save, copy);
+    item.appendChild(actions);
+
+    list.appendChild(item);
+  }
+
+  const total = state.files.length;
+  const parts = [`<b>${total}</b> file${total === 1 ? '' : 's'}`];
+  if (baked) parts.push(`<b>${baked}</b> with baked shadows`);
+  if (warned) parts.push(`<b>${warned}</b> with warnings`);
+  if (failed) parts.push(`<b>${failed}</b> failed`);
+  $('summary').innerHTML = total ? parts.join(' \u00b7 ') + (state.isExample ? ' (examples)' : '') : 'No files yet';
+  $('saveAll').disabled = !state.files.some((file) => file.output);
+  $('clearAll').disabled = !total;
+  renderSelectCount();
+}
+
+function renderSelectCount() {
+  const count = selectedFiles().length;
+  $('selectCount').textContent = count ? `${count} of ${state.files.length} selected` : 'None selected';
+  $('selectNone').disabled = !count;
+  $('selectAll').disabled = !state.files.length || count === state.files.length;
+}
+
+function setSelection(isSelected) {
+  for (const file of state.files) file.selected = isSelected(file);
+  syncControls();
+  render();
+}
+
+function matcherFor(pattern) {
+  const text = pattern.trim().toLowerCase();
+  if (!text) return null;
+  if (!/[*?]/.test(text)) return (path) => path.toLowerCase().includes(text);
+  const source = text.split('').map((c) => c === '*' ? '.*' : c === '?' ? '.' : c.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('');
+  const regex = new RegExp(`(^|/)${source}$`);
+  return (path) => regex.test(path.toLowerCase());
+}
+
+$('selectAll').addEventListener('click', () => setSelection(() => true));
+$('selectNone').addEventListener('click', () => setSelection(() => false));
+function selectMatches() {
+  const matches = matcherFor($('matchText').value);
+  if (!matches) { setStatus('Type part of a file name or path first, for example negative_* or icons/.', true); return; }
+  const count = state.files.filter((file) => matches(file.path)).length;
+  if (!count) { setStatus(`No files match \u201c${$('matchText').value.trim()}\u201d.`, true); return; }
+  setSelection((file) => matches(file.path));
+  setStatus(`Selected ${count} matching file${count > 1 ? 's' : ''}.`);
+}
+$('selectMatches').addEventListener('click', selectMatches);
+$('matchText').addEventListener('keydown', (event) => { if (event.key === 'Enter') selectMatches(); });
+
+function setStatus(text, isWarning = false) {
+  const status = $('status');
+  status.textContent = text;
+  status.className = isWarning ? 'status warn' : 'status';
+}
+
+async function saveFile(filename, data) {
+  const downloads = await downloadsReady;
+  if (!downloads && !window.claude) {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: 'image/svg+xml' }));
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    setStatus(`Saved ${filename}.`);
+    return;
+  }
+  if (!downloads) {
+    setStatus('Saving files is not available here. Use Copy SVG instead.', true);
+    return;
+  }
+  try {
+    await downloads.save({ filename, data });
+    setStatus(`Saved ${filename}.`);
+  } catch (error) {
+    const messages = {
+      declined: 'Save cancelled.',
+      rate_limited: 'A save prompt is already open. Finish it, then try again.',
+      too_large: 'The file is too large to save here.',
+    };
+    setStatus(messages[error?.code] ?? 'Saving files is not available here. Use Copy SVG instead.', error?.code !== 'declined');
+  }
+}
+
+async function copyText(text, name) {
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus(`Copied ${name} to the clipboard.`);
+  } catch {
+    setStatus('Copying was blocked. Use Save SVG instead.', true);
+  }
+}
+
+$('saveAll').addEventListener('click', async () => {
+  const ready = state.files.filter((file) => file.output);
+  if (!ready.length) return;
+  if (!window.JSZip) {
+    setStatus('The zip library did not load. Save files one at a time instead.', true);
+    return;
+  }
+  const zip = new window.JSZip();
+  for (const file of ready) zip.file(file.path, file.output);
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  await saveFile('flutter-svgs.zip', blob);
+});
+
+$('clearAll').addEventListener('click', () => {
+  state.files = [];
+  state.isExample = false;
+  setStatus('');
+  syncControls();
+  render();
+});
+
+async function addFiles(entries) {
+  const svgs = entries.filter(({ file }) => file.name.toLowerCase().endsWith('.svg'));
+  if (!svgs.length) {
+    setStatus('No .svg files found in what you dropped.', true);
+    return;
+  }
+  if (state.isExample) { state.files = []; state.isExample = false; }
+  for (const { file, path } of svgs) {
+    const source = await file.text();
+    const existing = state.files.findIndex((item) => item.path === path);
+    const record = { name: file.name, path, source, settings: { ...state.defaults }, selected: false, custom: false };
+    if (existing >= 0) state.files[existing] = record; else state.files.push(record);
+  }
+  const skipped = entries.length - svgs.length;
+  setStatus(`Loaded ${svgs.length} SVG${svgs.length > 1 ? 's' : ''}${skipped ? `, skipped ${skipped} other file${skipped > 1 ? 's' : ''}` : ''}.`);
+  syncControls();
+  processFiles(state.files);
+}
+
+async function readEntry(entry, prefix = '') {
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    return [{ file, path: prefix + file.name }];
+  }
+  if (!entry.isDirectory) return [];
+  const reader = entry.createReader();
+  const children = [];
+  for (;;) {
+    const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+    if (!batch.length) break;
+    children.push(...batch);
+  }
+  const files = [];
+  for (const child of children) files.push(...await readEntry(child, `${prefix}${entry.name}/`));
+  return files;
+}
+
+const tray = $('tray');
+['dragenter', 'dragover'].forEach((type) => tray.addEventListener(type, (event) => {
+  event.preventDefault();
+  tray.classList.add('over');
+}));
+['dragleave', 'drop'].forEach((type) => tray.addEventListener(type, () => tray.classList.remove('over')));
+document.addEventListener('dragover', (event) => event.preventDefault());
+document.addEventListener('drop', (event) => event.preventDefault());
+tray.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  const items = [...(event.dataTransfer?.items ?? [])];
+  const entries = items.map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  try {
+    if (entries.length) {
+      const files = [];
+      for (const entry of entries) files.push(...await readEntry(entry));
+      await addFiles(files);
+    } else {
+      await addFiles([...(event.dataTransfer?.files ?? [])].map((file) => ({ file, path: file.name })));
+    }
+  } catch {
+    setStatus('Some dropped files could not be read. Try Choose files instead.', true);
+  }
+});
+
+$('pickFiles').addEventListener('click', () => $('fileInput').click());
+$('pickFolder').addEventListener('click', () => $('folderInput').click());
+$('fileInput').addEventListener('change', (event) => {
+  addFiles([...event.target.files].map((file) => ({ file, path: file.name })));
+  event.target.value = '';
+});
+$('folderInput').addEventListener('change', (event) => {
+  addFiles([...event.target.files].map((file) => ({ file, path: file.webkitRelativePath || file.name })));
+  event.target.value = '';
+});
+
+let pending = 0;
+const dirty = new Set();
+function scheduleProcess(files) {
+  files.forEach((file) => dirty.add(file));
+  clearTimeout(pending);
+  pending = setTimeout(() => {
+    const files = [...dirty];
+    dirty.clear();
+    processFiles(files);
+  }, 180);
+}
+for (const field of FIELDS) {
+  if (field.kind === 'color') continue;
+  $(field.id).addEventListener('input', () => applyField(field, readControl(field)));
+}
+const colorField = FIELDS.find((field) => field.kind === 'color');
+$('addColor').addEventListener('input', () => applyField(colorField, $('addColor').value));
+$('addColorText').addEventListener('input', () => {
+  const value = $('addColorText').value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(value)) {
+    $('addColor').value = value;
+    applyField(colorField, value);
+  }
+});
+for (const radio of document.querySelectorAll('input[name="bg"]')) {
+  radio.addEventListener('change', () => {
+    state.bg = radio.value;
+    $('results').className = `results bg-${state.bg}`;
+  });
+}
+
+const EXAMPLES = [
+  {
+    path: 'logo.svg',
+    source: `<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .tile { fill: url(#tileFill); }
+  .top { fill: #ffffff; stroke: #ffffff; stroke-width: 3; stroke-linejoin: round; }
+  .layer { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+  .middle { stroke: #e0e9f9; }
+  .bottom { stroke: #a9c1ec; }
+</style>
+<g filter="url(#tileBevel)">
+  <rect class="tile" x="4" y="4" width="56" height="56" rx="14"/>
+</g>
+<g filter="url(#markShadow)">
+  <path class="top" d="M32 14 50 23 32 32 14 23Z"/>
+  <path class="layer middle" d="M14 32 32 41 50 32"/>
+  <path class="layer bottom" d="M14 41 32 50 50 41"/>
+</g>
+<defs>
+  <filter id="tileBevel" x="4" y="4" width="56" height="56" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+    <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="1"/>
+    <feGaussianBlur stdDeviation="0.75"/>
+    <feComposite in2="hardAlpha" operator="arithmetic" k2="-1" k3="1"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.25 0"/>
+    <feBlend mode="normal" in2="shape" result="effect1_innerShadow"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="-1.5"/>
+    <feGaussianBlur stdDeviation="1"/>
+    <feComposite in2="hardAlpha" operator="arithmetic" k2="-1" k3="1"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.02 0 0 0 0 0.08 0 0 0 0 0.2 0 0 0 0.3 0"/>
+    <feBlend mode="normal" in2="effect1_innerShadow" result="effect2_innerShadow"/>
+  </filter>
+  <filter id="markShadow" x="8" y="10" width="48" height="48" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+    <feOffset dy="2"/>
+    <feGaussianBlur stdDeviation="1.5"/>
+    <feComposite in2="hardAlpha" operator="out"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.04 0 0 0 0 0.14 0 0 0 0 0.31 0 0 0 0.55 0"/>
+    <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+    <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+  </filter>
+  <linearGradient id="tileFill" x1="12" y1="4" x2="52" y2="60" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#3d82ea"/>
+    <stop offset="1" stop-color="#1a4a9e"/>
+  </linearGradient>
+</defs>
+</svg>`,
+  },
+];
+
+state.defaults = Object.fromEntries(FIELDS.map((field) => [field.key, readControl(field)]));
+const favicon = document.querySelector('link[rel="icon"]') ?? document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'icon' }));
+favicon.type = 'image/svg+xml';
+favicon.href = `data:image/svg+xml,${encodeURIComponent(EXAMPLES[0].source)}`;
+state.files = EXAMPLES.map(({ path, source }) => ({
+  path, name: path.split('/').pop(), source, settings: { ...state.defaults }, selected: false, custom: false,
+}));
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const SUN = 'M12 4V2m0 20v-2m8-8h2M2 12h2m13.66-5.66 1.41-1.41M4.93 19.07l1.41-1.41m0-11.32L4.93 4.93m14.14 14.14-1.41-1.41M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z';
+const MOON = 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z';
+const isDark = () => (document.documentElement.dataset.theme ?? (darkQuery.matches ? 'dark' : 'light')) === 'dark';
+function renderThemeToggle() {
+  const dark = isDark();
+  $('themeLabel').textContent = dark ? 'Light mode' : 'Dark mode';
+  $('themeIcon').setAttribute('d', dark ? SUN : MOON);
+  $('themeToggle').setAttribute('aria-pressed', String(dark));
+}
+$('themeToggle').addEventListener('click', () => {
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('shadow-baker-theme', next); } catch {}
+  renderThemeToggle();
+});
+darkQuery.addEventListener('change', renderThemeToggle);
+new MutationObserver(renderThemeToggle).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+renderThemeToggle();
+syncControls();
+processFiles(state.files);
+</script>
+</body>
+</html>
