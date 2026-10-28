@@ -113,7 +113,8 @@
   }
   .tray.over { border-color: var(--accent); background: var(--accent-soft); }
   .tray strong { font-size: 20px; line-height: 1.15; }
-  .tray p { margin: 0; color: var(--muted); font-size: 14px; }
+  .tray p { margin: 0; color: var(--muted); font-size: 14px; max-width: 46ch; }
+  kbd { font: 500 12px var(--font-mono); padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--sunken); color: var(--ink); }
   .buttons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
   button {
@@ -291,7 +292,7 @@
     <main class="work">
       <div class="tray" id="tray">
         <strong class="display">Drop SVG files or folders</strong>
-        <p>Folder structure is kept when you save everything as a .zip.</p>
+        <p>Or paste SVG code or files with <kbd>Ctrl</kbd>/<kbd>&#8984;</kbd> <kbd>V</kbd>. Folder structure is kept when you save everything as a .zip.</p>
         <div class="buttons">
           <button type="button" class="primary" id="pickFiles">Choose files</button>
           <button type="button" id="pickFolder">Choose folder</button>
@@ -1263,6 +1264,39 @@ async function addFiles(entries) {
   syncControls();
   processFiles(state.files);
 }
+
+function pastedName() {
+  const taken = new Set(state.isExample ? [] : state.files.map((file) => file.path));
+  let name = 'pasted.svg';
+  for (let n = 2; taken.has(name); n++) name = `pasted-${n}.svg`;
+  return name;
+}
+
+// Design tools copy SVG as plain text; Finder copies files. Typing into the page's own fields keeps normal paste.
+document.addEventListener('paste', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+  const data = event.clipboardData;
+  if (!data) return;
+
+  const files = [...data.files].filter((file) => file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg'));
+  if (files.length) {
+    event.preventDefault();
+    addFiles(files.map((file) => ({ file, path: file.name })));
+    return;
+  }
+
+  const text = data.getData('text/plain') || data.getData('text/html');
+  const start = text.search(/<svg[\s>]/i);
+  const end = text.toLowerCase().lastIndexOf('</svg>');
+  if (start === -1 || end < start) {
+    setStatus('The clipboard has no SVG in it. Copy SVG code or an .svg file, then paste again.', true);
+    return;
+  }
+  event.preventDefault();
+  const name = pastedName();
+  addFiles([{ file: new File([text.slice(start, end + 6)], name, { type: 'image/svg+xml' }), path: name }]);
+});
 
 async function readEntry(entry, prefix = '') {
   if (entry.isFile) {

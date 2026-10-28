@@ -10,7 +10,7 @@ Everything runs in your browser. Files never leave your machine.
 
 ## Use it
 
-Open `index.html` in a browser, or serve the folder (for example with GitHub Pages), then drop SVG files or whole folders onto the page.
+Open `index.html` in a browser, or serve the folder (for example with GitHub Pages), then drop SVG files or whole folders onto the page. You can also paste: SVG code copied from a design tool (Figma's **Copy as SVG**, for example) or `.svg` files copied in your file manager.
 
 The page opens with its own logo as an example. `logo.svg` uses a `<style>` block for its colours, two inner shadows on the tile and a drop shadow under the mark, so `flutter_svg` draws nothing at all from the original.
 
